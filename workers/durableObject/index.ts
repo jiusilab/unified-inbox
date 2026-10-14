@@ -12,6 +12,7 @@ import type { Env } from "../types";
 import { applyMigrations, mailboxMigrations } from "./migrations";
 import PostalMime from "postal-mime";
 import { connect } from "cloudflare:sockets";
+import { syncPop3, testPop3Login, type Pop3Account, type Pop3Store } from "../pop3/sync";
 import { syncAccount, testLogin, type IngestMeta, type OpKind, type SyncStore, type SyncSummary, type ImapAccount } from "../imap/sync";
 
 /**
@@ -1076,6 +1077,39 @@ export class MailboxDO extends DurableObject<Env> {
 			// More to do (initial import, or ops left)? Keep going soon via alarm.
 			if (!summary.error && summary.remaining > 0) this.ctx.storage.setAlarm(Date.now() + 15_000);
 		}
+
+		const popStore: Pop3Store = {
+			isInitialDone: (account) =>
+				([...sqlx.exec(`SELECT initial_done FROM imap_state WHERE account = ?`, account)][0] as any)?.initial_done == 1,
+			setInitialDone: (account) =>
+				sqlx.exec(
+					`INSERT INTO imap_state (account, uid_validity, last_uid, initial_done) VALUES (?, 0, 0, 1)
+					 ON CONFLICT(account) DO UPDATE SET initial_done = 1`, account,
+				),
+			seen: (account) => new Set(([...sqlx.exec(`SELECT uid FROM pop3_seen WHERE account = ?`, account)] as any[]).map((r) => String(r.uid))),
+			markSeen: (account, uids) => {
+				for (const u of uids) sqlx.exec(`INSERT OR IGNORE INTO pop3_seen (account, uid) VALUES (?, ?)`, account, u);
+			},
+			ingest: (raw, meta) => this.ingestRaw(raw, meta),
+		};
+		for (const acct of this.#pop3Accounts()) {
+			const summary = await syncPop3(acct, popStore, {
+				open: () => {
+					const socket = connect({ hostname: acct.host, port: acct.port }, { secureTransport: "on", allowHalfOpen: false });
+					return { readable: socket.readable, writable: socket.writable };
+				},
+				initialDays: Number((this.env as any).IMAP_INITIAL_DAYS || 90),
+				maxMessages: 15,
+				budgetMs: 25_000,
+			});
+			sqlx.exec(
+				`INSERT INTO imap_state (account, uid_validity, last_uid, initial_done, last_run_at, last_summary) VALUES (?, 0, 0, 0, ?, ?)
+				 ON CONFLICT(account) DO UPDATE SET last_run_at = excluded.last_run_at, last_summary = excluded.last_summary`,
+				acct.name, new Date().toISOString(), JSON.stringify(summary),
+			);
+			results.push(summary);
+			if (!summary.error && summary.remaining > 0) this.ctx.storage.setAlarm(Date.now() + 15_000);
+		}
 		return results;
 	}
 
@@ -1136,26 +1170,36 @@ export class MailboxDO extends DurableObject<Env> {
 	}
 
 	#storedImapAccounts(): ImapAccount[] {
-		return ([...this.ctx.storage.sql.exec(`SELECT account, email, host, port, password FROM imap_accounts`)] as any[]).map((r) => ({
+		return ([...this.ctx.storage.sql.exec(`SELECT account, email, host, port, password FROM imap_accounts WHERE protocol = 'imap'`)] as any[]).map((r) => ({
 			name: String(r.account), host: String(r.host), port: Number(r.port), user: String(r.email), pass: String(r.password),
 		}));
 	}
 
-	async addImapAccount(a: { email: string; password: string; host: string; port: number }) {
+	#pop3Accounts(): Pop3Account[] {
+		return ([...this.ctx.storage.sql.exec(`SELECT account, email, host, port, password FROM imap_accounts WHERE protocol = 'pop3'`)] as any[]).map((r) => ({
+			name: String(r.account), host: String(r.host), port: Number(r.port), user: String(r.email), pass: String(r.password),
+		}));
+	}
+
+	async addImapAccount(a: { email: string; password: string; host: string; port: number; protocol?: "imap" | "pop3" }) {
 		const email = a.email.trim().toLowerCase();
-		const acct: ImapAccount = { name: `imap:${email}`, host: a.host.trim(), port: a.port || 993, user: email, pass: a.password.replace(/\s+/g, "") };
+		const protocol = a.protocol === "pop3" ? "pop3" : "imap";
+		const port = a.port || (protocol === "pop3" ? 995 : 993);
+		const acct = { name: `${protocol}:${email}`, host: a.host.trim(), port, user: email, pass: a.password.replace(/\s+/g, "") };
+		const open = () => {
+			const socket = connect({ hostname: acct.host, port: acct.port }, { secureTransport: "on", allowHalfOpen: false });
+			return { readable: socket.readable, writable: socket.writable };
+		};
 		try {
-			await testLogin(acct, () => {
-				const socket = connect({ hostname: acct.host, port: acct.port }, { secureTransport: "on", allowHalfOpen: false });
-				return { readable: socket.readable, writable: socket.writable };
-			});
+			if (protocol === "pop3") await testPop3Login(acct, open);
+			else await testLogin(acct, open);
 		} catch (e) {
 			return { ok: false, error: (e as Error).message };
 		}
 		this.ctx.storage.sql.exec(
-			`INSERT INTO imap_accounts (account, email, host, port, password) VALUES (?, ?, ?, ?, ?)
+			`INSERT INTO imap_accounts (account, email, host, port, password, protocol) VALUES (?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(account) DO UPDATE SET host = excluded.host, port = excluded.port, password = excluded.password`,
-			acct.name, email, acct.host, acct.port, acct.pass,
+			acct.name, email, acct.host, acct.port, acct.pass, protocol,
 		);
 		this.ctx.storage.setAlarm(Date.now() + 1_000);
 		return { ok: true, account: acct.name };
@@ -1166,6 +1210,7 @@ export class MailboxDO extends DurableObject<Env> {
 		const r = [...sqlx.exec(`SELECT refresh_token FROM oauth_accounts WHERE account = ?`, account)][0] as any;
 		sqlx.exec(`DELETE FROM oauth_accounts WHERE account = ?`, account);
 		sqlx.exec(`DELETE FROM imap_accounts WHERE account = ?`, account);
+		sqlx.exec(`DELETE FROM pop3_seen WHERE account = ?`, account);
 		sqlx.exec(`DELETE FROM imap_state WHERE account = ?`, account);
 		sqlx.exec(`DELETE FROM imap_ops WHERE account = ?`, account);
 		// Emails already imported stay; they just stop syncing.
@@ -1198,8 +1243,8 @@ export class MailboxDO extends DurableObject<Env> {
 		for (const r of [...sqlx.exec(`SELECT account, email, last_error FROM oauth_accounts ORDER BY created_at`)] as any[]) {
 			out.push(view(String(r.account), String(r.email), "google", r.last_error));
 		}
-		for (const r of [...sqlx.exec(`SELECT account, email FROM imap_accounts ORDER BY created_at`)] as any[]) {
-			out.push(view(String(r.account), String(r.email), "imap"));
+		for (const r of [...sqlx.exec(`SELECT account, email, protocol FROM imap_accounts ORDER BY created_at`)] as any[]) {
+			out.push(view(String(r.account), String(r.email), String(r.protocol)));
 		}
 		return out;
 	}

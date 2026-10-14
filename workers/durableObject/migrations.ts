@@ -228,4 +228,15 @@ export const mailboxMigrations: Migration[] = [
             );
         `,
 	},
+	{
+		name: "12_pop3",
+		sql: `
+            ALTER TABLE imap_accounts ADD COLUMN protocol TEXT NOT NULL DEFAULT 'imap';
+            CREATE TABLE IF NOT EXISTS pop3_seen (
+                account TEXT NOT NULL,
+                uid TEXT NOT NULL,
+                PRIMARY KEY (account, uid)
+            );
+        `,
+	},
 ];

@@ -308,7 +308,7 @@ export default function EmailListRoute() {
 				</div>
 
 				{/* Email rows */}
-				<div className="flex-1 overflow-y-auto">
+				<div className="flex-1 min-h-0 overflow-y-auto">
 				{isRefreshing && emails.length === 0 ? (
 					<EmailListSkeleton />
 				) : emails.length > 0 ? (

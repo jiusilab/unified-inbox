@@ -96,7 +96,7 @@ export default function SettingsRoute() {
 type SourceAccount = {
 	account: string;
 	email: string;
-	kind: "google" | "password" | "imap";
+	kind: "google" | "password" | "imap" | "pop3";
 	initialDone: boolean;
 	lastRunAt: string | null;
 	error: string | null;
@@ -145,6 +145,7 @@ function SourceAccounts() {
 	const [imapEmail, setImapEmail] = useState("");
 	const [imapPass, setImapPass] = useState("");
 	const [imapHost, setImapHost] = useState("");
+	const [protocol, setProtocol] = useState<"imap" | "pop3">("imap");
 	const [adding, setAdding] = useState(false);
 	const [imapError, setImapError] = useState("");
 
@@ -155,7 +156,7 @@ function SourceAccounts() {
 			const res = await fetch("/api/v1/accounts/imap", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ email: imapEmail, password: imapPass, host: imapHost }),
+				body: JSON.stringify({ email: imapEmail, password: imapPass, host: imapHost, protocol }),
 			});
 			const j = (await res.json()) as { ok: boolean; error?: string };
 			if (!j.ok) {
@@ -199,7 +200,12 @@ function SourceAccounts() {
 					{accounts.map((a) => (
 						<div key={a.account} className="flex items-center justify-between rounded-md border border-kumo-line px-3 py-2">
 							<div className="min-w-0">
-								<div className="text-sm text-kumo-default truncate">{a.email}</div>
+								<div className="text-sm text-kumo-default truncate">
+									{a.email}
+									<span className="ml-2 text-xs text-kumo-subtle">
+										{a.kind === "google" ? "Gmail" : a.kind === "pop3" ? "POP3" : "IMAP"}
+									</span>
+								</div>
 								<div className={`text-xs ${a.error ? "text-kumo-danger" : "text-kumo-subtle"}`}>
 									{a.error
 										? `同步出错：${a.error}`
@@ -241,14 +247,29 @@ function SourceAccounts() {
 					className="inline-flex items-center gap-2 rounded-md border border-kumo-line px-3 py-1.5 text-sm text-kumo-default hover:bg-kumo-recessed"
 				>
 					<EnvelopeSimpleIcon size={16} />
-					添加 IMAP 邮箱（163 / QQ 等）
+					添加 IMAP / POP3 邮箱
 				</button>
 			</div>
 			{showImap && (
 				<div className="mt-3 space-y-3 rounded-md border border-kumo-line p-3">
+					<div className="flex gap-2">
+						{(["imap", "pop3"] as const).map((p) => (
+							<button
+								key={p}
+								type="button"
+								onClick={() => setProtocol(p)}
+								className={`rounded-md border px-3 py-1 text-xs ${protocol === p ? "border-kumo-brand text-kumo-default bg-kumo-tint" : "border-kumo-line text-kumo-subtle"}`}
+							>
+								{p.toUpperCase()}
+							</button>
+						))}
+					</div>
+					{protocol === "pop3" && (
+						<p className="text-xs text-kumo-subtle">POP3 只拉取新邮件，邮件保留在原邮箱，删除和已读状态都不会同步回去。能用 IMAP 的邮箱优先用 IMAP。</p>
+					)}
 					<Input label="邮箱地址" value={imapEmail} onChange={(e) => setImapEmail(e.target.value)} placeholder="name@163.com" />
 					<Input label="授权码" type="password" value={imapPass} onChange={(e) => setImapPass(e.target.value)} placeholder="邮箱设置里生成的客户端授权码，不是登录密码" />
-					<Input label="IMAP 服务器（可选）" value={imapHost} onChange={(e) => setImapHost(e.target.value)} placeholder="163、126、QQ 等会自动识别" />
+					<Input label={`${protocol.toUpperCase()} 服务器（可选）`} value={imapHost} onChange={(e) => setImapHost(e.target.value)} placeholder="163、126、QQ 等会自动识别" />
 					{imapError && <p className="text-xs text-kumo-danger">{imapError}</p>}
 					<div className="flex justify-end">
 						<Button variant="primary" size="sm" onClick={addImap} loading={adding}>

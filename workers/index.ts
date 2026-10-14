@@ -414,15 +414,24 @@ const IMAP_PRESETS: Record<string, string> = {
 	"yahoo.com": "imap.mail.yahoo.com",
 };
 
+const POP3_PRESETS: Record<string, string> = {
+	"163.com": "pop.163.com", "126.com": "pop.126.com", "yeah.net": "pop.yeah.net",
+	"qq.com": "pop.qq.com", "foxmail.com": "pop.qq.com", "sina.com": "pop.sina.com",
+	"aliyun.com": "pop3.aliyun.com", "139.com": "pop.139.com", "yahoo.com": "pop.mail.yahoo.com",
+};
+
 app.post("/api/v1/accounts/imap", async (c) => {
-	const body = (await c.req.json().catch(() => ({}))) as { email?: string; password?: string; host?: string; port?: number };
+	const body = (await c.req.json().catch(() => ({}))) as { email?: string; password?: string; host?: string; port?: number; protocol?: string };
+	const protocol = body.protocol === "pop3" ? "pop3" : "imap";
 	const email = String(body.email || "").trim();
 	const password = String(body.password || "");
 	if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || !password) return c.json({ ok: false, error: "请填写邮箱地址和授权码" }, 400);
-	const host = String(body.host || "").trim() || IMAP_PRESETS[email.split("@")[1].toLowerCase()];
-	if (!host) return c.json({ ok: false, error: "不认识这个邮箱的 IMAP 服务器，请手动填写" }, 400);
+	const preset = IMAP_PRESETS[email.split("@")[1].toLowerCase()];
+	const presetHost = preset && protocol === "pop3" ? POP3_PRESETS[email.split("@")[1].toLowerCase()] : preset;
+	const host = String(body.host || "").trim() || presetHost;
+	if (!host) return c.json({ ok: false, error: `不认识这个邮箱的 ${protocol.toUpperCase()} 服务器，请手动填写` }, 400);
 	const stub = await ensureUnifiedMailbox(c.env);
-	const r = await (stub as any).addImapAccount({ email, password, host, port: Number(body.port) || 993 });
+	const r = await (stub as any).addImapAccount({ email, password, host, port: Number(body.port) || 0, protocol });
 	return c.json(r, r.ok ? 200 : 400);
 });
 
