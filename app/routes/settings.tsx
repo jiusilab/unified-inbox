@@ -3,7 +3,7 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 import { Badge, Button, Input, Loader, useKumoToastManager } from "@cloudflare/kumo";
-import { GoogleLogoIcon, TrashIcon, ArrowsClockwiseIcon } from "@phosphor-icons/react";
+import { GoogleLogoIcon, TrashIcon, ArrowsClockwiseIcon, EnvelopeSimpleIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { useParams, useSearchParams } from "react-router";
 import { useMailbox, useUpdateMailbox } from "~/queries/mailboxes";
@@ -96,7 +96,7 @@ export default function SettingsRoute() {
 type SourceAccount = {
 	account: string;
 	email: string;
-	kind: "google" | "password";
+	kind: "google" | "password" | "imap";
 	initialDone: boolean;
 	lastRunAt: string | null;
 	error: string | null;
@@ -141,6 +141,38 @@ function SourceAccounts() {
 		load();
 	};
 
+	const [showImap, setShowImap] = useState(false);
+	const [imapEmail, setImapEmail] = useState("");
+	const [imapPass, setImapPass] = useState("");
+	const [imapHost, setImapHost] = useState("");
+	const [adding, setAdding] = useState(false);
+	const [imapError, setImapError] = useState("");
+
+	const addImap = async () => {
+		setAdding(true);
+		setImapError("");
+		try {
+			const res = await fetch("/api/v1/accounts/imap", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ email: imapEmail, password: imapPass, host: imapHost }),
+			});
+			const j = (await res.json()) as { ok: boolean; error?: string };
+			if (!j.ok) {
+				setImapError(j.error || "添加失败");
+				return;
+			}
+			toastManager.add({ title: `已添加 ${imapEmail}，正在导入` });
+			setShowImap(false);
+			setImapEmail("");
+			setImapPass("");
+			setImapHost("");
+			load();
+		} finally {
+			setAdding(false);
+		}
+	};
+
 	const syncNow = async () => {
 		setSyncing(true);
 		try {
@@ -178,7 +210,7 @@ function SourceAccounts() {
 												: "正在导入最近 90 天的邮件…"}
 								</div>
 							</div>
-							{a.kind === "google" ? (
+							{a.kind !== "password" ? (
 								<Button variant="ghost" size="xs" icon={<TrashIcon size={14} />} onClick={() => remove(a)}>
 									移除
 								</Button>
@@ -189,7 +221,7 @@ function SourceAccounts() {
 					))}
 				</div>
 			)}
-			<div className="mt-4">
+			<div className="mt-4 flex flex-wrap items-center gap-2">
 				{googleConfigured ? (
 					<a
 						href="/oauth/google/start"
@@ -203,7 +235,28 @@ function SourceAccounts() {
 						需要先在 Worker 上设置 GOOGLE_CLIENT_ID 和 GOOGLE_CLIENT_SECRET。
 					</p>
 				)}
+				<button
+					type="button"
+					onClick={() => setShowImap((v) => !v)}
+					className="inline-flex items-center gap-2 rounded-md border border-kumo-line px-3 py-1.5 text-sm text-kumo-default hover:bg-kumo-recessed"
+				>
+					<EnvelopeSimpleIcon size={16} />
+					添加 IMAP 邮箱（163 / QQ 等）
+				</button>
 			</div>
+			{showImap && (
+				<div className="mt-3 space-y-3 rounded-md border border-kumo-line p-3">
+					<Input label="邮箱地址" value={imapEmail} onChange={(e) => setImapEmail(e.target.value)} placeholder="name@163.com" />
+					<Input label="授权码" type="password" value={imapPass} onChange={(e) => setImapPass(e.target.value)} placeholder="邮箱设置里生成的客户端授权码，不是登录密码" />
+					<Input label="IMAP 服务器（可选）" value={imapHost} onChange={(e) => setImapHost(e.target.value)} placeholder="163、126、QQ 等会自动识别" />
+					{imapError && <p className="text-xs text-kumo-danger">{imapError}</p>}
+					<div className="flex justify-end">
+						<Button variant="primary" size="sm" onClick={addImap} loading={adding}>
+							验证并添加
+						</Button>
+					</div>
+				</div>
+			)}
 			<p className="text-xs text-kumo-subtle mt-3">
 				Hotmail、linux.do、NodeSeek 等请设置转发到任意 @yuzh.de 地址。
 			</p>

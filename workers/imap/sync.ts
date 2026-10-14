@@ -86,6 +86,20 @@ async function findMailboxes(c: ImapClient): Promise<Mailboxes> {
 	return { inbox: "INBOX", all: find("\\All"), trash: find("\\Trash") };
 }
 
+/** Log in only (used to validate a new account before saving it). */
+export async function testLogin(acct: ImapAccount, open: SyncOptions["open"]): Promise<void> {
+	const { readable, writable } = open();
+	const c = new ImapClient(readable, writable);
+	try {
+		await c.greeting();
+		await c.login(acct.user, acct.pass ?? "");
+		await c.id();
+		await c.select("INBOX");
+	} finally {
+		await c.logout().catch(() => {});
+	}
+}
+
 export async function syncAccount(acct: ImapAccount, store: SyncStore, opts: SyncOptions): Promise<SyncSummary> {
 	const started = Date.now();
 	const budgetMs = opts.budgetMs ?? 20_000;
@@ -106,6 +120,7 @@ export async function syncAccount(acct: ImapAccount, store: SyncStore, opts: Syn
 		await c.greeting();
 		if (acct.accessToken) await c.authenticateXOAuth2(acct.user, await acct.accessToken());
 		else await c.login(acct.user, acct.pass ?? "");
+		await c.id();
 		const isGmail = c.capabilities.has("X-GM-EXT-1");
 		const boxes = await findMailboxes(c);
 

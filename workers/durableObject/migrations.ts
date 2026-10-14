@@ -214,4 +214,18 @@ export const mailboxMigrations: Migration[] = [
             );
         `,
 	},
+	{
+		// Generic IMAP accounts added from Settings (163 / 126 / QQ … with an app authorization code).
+		name: "11_imap_accounts",
+		sql: `
+            CREATE TABLE IF NOT EXISTS imap_accounts (
+                account TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                host TEXT NOT NULL,
+                port INTEGER NOT NULL DEFAULT 993,
+                password TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+        `,
+	},
 ];

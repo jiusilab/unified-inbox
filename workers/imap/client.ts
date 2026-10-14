@@ -195,6 +195,14 @@ export class ImapClient {
 		}
 	}
 
+	/** RFC 2971 ID. NetEase (163/126/yeah) refuses SELECT ("Unsafe Login") until the client identifies itself. */
+	async id(): Promise<void> {
+		if (!this.capabilities.has("ID")) return;
+		try {
+			await this.command(`ID ("name" "unified-inbox" "version" "1.0" "vendor" "unified-inbox")`, "ID");
+		} catch {}
+	}
+
 	/** SASL XOAUTH2 (Gmail "Sign in with Google"). */
 	async authenticateXOAuth2(user: string, accessToken: string): Promise<void> {
 		const sasl = btoa(`user=${user}\u0001auth=Bearer ${accessToken}\u0001\u0001`);

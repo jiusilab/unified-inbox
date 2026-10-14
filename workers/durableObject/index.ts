@@ -12,7 +12,7 @@ import type { Env } from "../types";
 import { applyMigrations, mailboxMigrations } from "./migrations";
 import PostalMime from "postal-mime";
 import { connect } from "cloudflare:sockets";
-import { syncAccount, type IngestMeta, type OpKind, type SyncStore, type SyncSummary, type ImapAccount } from "../imap/sync";
+import { syncAccount, testLogin, type IngestMeta, type OpKind, type SyncStore, type SyncSummary, type ImapAccount } from "../imap/sync";
 
 /**
  * SQL expression to normalize email subjects by stripping common
@@ -1057,7 +1057,7 @@ export class MailboxDO extends DurableObject<Env> {
 		};
 
 		const results: SyncSummary[] = [];
-		for (const acct of [...this.#accounts(), ...this.#oauthAccounts()]) {
+		for (const acct of [...this.#accounts(), ...this.#oauthAccounts(), ...this.#storedImapAccounts()]) {
 			const summary = await syncAccount(acct, store, {
 				open: () => {
 					const socket = connect({ hostname: acct.host, port: acct.port }, { secureTransport: "on", allowHalfOpen: false });
@@ -1135,10 +1135,37 @@ export class MailboxDO extends DurableObject<Env> {
 		return account;
 	}
 
+	#storedImapAccounts(): ImapAccount[] {
+		return ([...this.ctx.storage.sql.exec(`SELECT account, email, host, port, password FROM imap_accounts`)] as any[]).map((r) => ({
+			name: String(r.account), host: String(r.host), port: Number(r.port), user: String(r.email), pass: String(r.password),
+		}));
+	}
+
+	async addImapAccount(a: { email: string; password: string; host: string; port: number }) {
+		const email = a.email.trim().toLowerCase();
+		const acct: ImapAccount = { name: `imap:${email}`, host: a.host.trim(), port: a.port || 993, user: email, pass: a.password.replace(/\s+/g, "") };
+		try {
+			await testLogin(acct, () => {
+				const socket = connect({ hostname: acct.host, port: acct.port }, { secureTransport: "on", allowHalfOpen: false });
+				return { readable: socket.readable, writable: socket.writable };
+			});
+		} catch (e) {
+			return { ok: false, error: (e as Error).message };
+		}
+		this.ctx.storage.sql.exec(
+			`INSERT INTO imap_accounts (account, email, host, port, password) VALUES (?, ?, ?, ?, ?)
+			 ON CONFLICT(account) DO UPDATE SET host = excluded.host, port = excluded.port, password = excluded.password`,
+			acct.name, email, acct.host, acct.port, acct.pass,
+		);
+		this.ctx.storage.setAlarm(Date.now() + 1_000);
+		return { ok: true, account: acct.name };
+	}
+
 	async removeOAuthAccount(account: string) {
 		const sqlx = this.ctx.storage.sql;
 		const r = [...sqlx.exec(`SELECT refresh_token FROM oauth_accounts WHERE account = ?`, account)][0] as any;
 		sqlx.exec(`DELETE FROM oauth_accounts WHERE account = ?`, account);
+		sqlx.exec(`DELETE FROM imap_accounts WHERE account = ?`, account);
 		sqlx.exec(`DELETE FROM imap_state WHERE account = ?`, account);
 		sqlx.exec(`DELETE FROM imap_ops WHERE account = ?`, account);
 		// Emails already imported stay; they just stop syncing.
@@ -1170,6 +1197,9 @@ export class MailboxDO extends DurableObject<Env> {
 		const out = this.#accounts().map((a) => view(a.name, a.user, "password"));
 		for (const r of [...sqlx.exec(`SELECT account, email, last_error FROM oauth_accounts ORDER BY created_at`)] as any[]) {
 			out.push(view(String(r.account), String(r.email), "google", r.last_error));
+		}
+		for (const r of [...sqlx.exec(`SELECT account, email FROM imap_accounts ORDER BY created_at`)] as any[]) {
+			out.push(view(String(r.account), String(r.email), "imap"));
 		}
 		return out;
 	}

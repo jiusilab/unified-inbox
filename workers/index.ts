@@ -407,6 +407,25 @@ app.get("/api/v1/accounts", async (c) => {
 	});
 });
 
+const IMAP_PRESETS: Record<string, string> = {
+	"163.com": "imap.163.com", "126.com": "imap.126.com", "yeah.net": "imap.yeah.net",
+	"qq.com": "imap.qq.com", "foxmail.com": "imap.qq.com", "sina.com": "imap.sina.com",
+	"aliyun.com": "imap.aliyun.com", "139.com": "imap.139.com", "icloud.com": "imap.mail.me.com",
+	"yahoo.com": "imap.mail.yahoo.com",
+};
+
+app.post("/api/v1/accounts/imap", async (c) => {
+	const body = (await c.req.json().catch(() => ({}))) as { email?: string; password?: string; host?: string; port?: number };
+	const email = String(body.email || "").trim();
+	const password = String(body.password || "");
+	if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || !password) return c.json({ ok: false, error: "请填写邮箱地址和授权码" }, 400);
+	const host = String(body.host || "").trim() || IMAP_PRESETS[email.split("@")[1].toLowerCase()];
+	if (!host) return c.json({ ok: false, error: "不认识这个邮箱的 IMAP 服务器，请手动填写" }, 400);
+	const stub = await ensureUnifiedMailbox(c.env);
+	const r = await (stub as any).addImapAccount({ email, password, host, port: Number(body.port) || 993 });
+	return c.json(r, r.ok ? 200 : 400);
+});
+
 app.delete("/api/v1/accounts/:account", async (c) => {
 	const stub = await ensureUnifiedMailbox(c.env);
 	return c.json(await (stub as any).removeOAuthAccount(decodeURIComponent(c.req.param("account"))));
