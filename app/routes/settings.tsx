@@ -382,6 +382,17 @@ function OtpTelegram() {
 	const [st, setSt] = useState<OtpState | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [err, setErr] = useState<string | null>(null);
+	const [tok, setTok] = useState("");
+	const saveTok = async () => {
+		setBusy(true); setErr(null);
+		try {
+			const j = await (await fetch("/api/v1/otp/token", {
+				method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: tok }),
+			})).json();
+			if (!j.ok) setErr(j.error); else setTok("");
+			await load();
+		} finally { setBusy(false); }
+	};
 	const load = async () => {
 		const r = await fetch("/api/v1/otp");
 		if (r.ok) setSt(await r.json());
@@ -429,7 +440,16 @@ function OtpTelegram() {
 				新到的验证码邮件只把验证码和发件人推到 Telegram，原信移到「验证码」文件夹，24 小时后自动删除。账单、扣款、密码重置类邮件不会被处理。Telegram 发送失败时邮件留在收件箱。
 			</p>
 			{st === null ? <Loader /> : !st.hasToken ? (
-				<p className="text-xs text-kumo-subtle">还没有设置 Worker secret TELEGRAM_BOT_TOKEN。</p>
+				<div className="flex items-center gap-2">
+					<input
+						type="password"
+						value={tok}
+						onChange={(e) => setTok(e.target.value)}
+						placeholder="粘贴 @BotFather 给的机器人 token"
+						className="flex-1 rounded-md border border-kumo-line bg-kumo-base px-2 py-1 text-xs"
+					/>
+					<Button size="xs" variant="secondary" onClick={saveTok} loading={busy} disabled={!tok.trim()}>保存</Button>
+				</div>
 			) : (
 				<div className="flex items-center justify-between gap-2">
 					<span className="text-xs text-kumo-subtle">

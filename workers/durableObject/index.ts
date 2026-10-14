@@ -999,7 +999,21 @@ export class MailboxDO extends DurableObject<Env> {
 	async otpSettings() {
 		const s = ((await this.ctx.storage.get("otp")) as { enabled?: boolean; chatId?: string; chatName?: string; lastPush?: string }) || {};
 		return { enabled: !!s.enabled, chatId: s.chatId || null, chatName: s.chatName || null, lastPush: s.lastPush || null,
-			hasToken: !!(this.env as any).TELEGRAM_BOT_TOKEN };
+			hasToken: !!(await this.#tgToken()) };
+	}
+
+	async #tgToken(): Promise<string | undefined> {
+		return ((await this.ctx.storage.get("tg_token")) as string | undefined) || (this.env as any).TELEGRAM_BOT_TOKEN;
+	}
+
+	async otpSetToken(token: string) {
+		token = token.trim();
+		if (!/^\d+:[\w-]{30,}$/.test(token)) return { ok: false, error: "格式不对，应该像 123456:ABC-xyz…" };
+		const r = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+		const j = (await r.json().catch(() => ({}))) as any;
+		if (!j.ok) return { ok: false, error: "Telegram 不认这个 token" };
+		await this.ctx.storage.put("tg_token", token);
+		return { ok: true, bot: j.result?.username };
 	}
 
 	async otpSetEnabled(enabled: boolean) {
@@ -1010,8 +1024,8 @@ export class MailboxDO extends DurableObject<Env> {
 	}
 
 	async otpBind() {
-		const token = (this.env as any).TELEGRAM_BOT_TOKEN as string | undefined;
-		if (!token) return { ok: false, error: "还没有设置 TELEGRAM_BOT_TOKEN" };
+		const token = await this.#tgToken();
+		if (!token) return { ok: false, error: "先填机器人 token" };
 		const r = await fetch(`https://api.telegram.org/bot${token}/getUpdates`);
 		const j = (await r.json()) as any;
 		if (!j.ok) return { ok: false, error: `Telegram: ${j.description || r.status}` };
@@ -1031,7 +1045,7 @@ export class MailboxDO extends DurableObject<Env> {
 		// only fresh mail: never replay old codes during an initial import
 		if (Date.now() - Date.parse(date) > 15 * 60_000) return;
 		const s = ((await this.ctx.storage.get("otp")) as any) || {};
-		const token = (this.env as any).TELEGRAM_BOT_TOKEN as string | undefined;
+		const token = await this.#tgToken();
 		if (!s.enabled || !s.chatId || !token) return;
 		const hit = detectOtp(subject, body);
 		if (!hit) return;

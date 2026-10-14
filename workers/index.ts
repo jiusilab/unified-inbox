@@ -402,6 +402,10 @@ app.get("/api/v1/sync", async (c) => {
 // Verification codes → Telegram
 const uStub = (c: Context) => c.env.MAILBOX.get(c.env.MAILBOX.idFromName(unifiedMailboxId(c.env))) as any;
 app.get("/api/v1/otp", async (c) => c.json(await uStub(c).otpSettings()));
+app.post("/api/v1/otp/token", async (c) => {
+	const { token } = (await c.req.json().catch(() => ({}))) as { token?: string };
+	return c.json(await uStub(c).otpSetToken(token || ""));
+});
 app.post("/api/v1/otp/bind", async (c) => c.json(await uStub(c).otpBind()));
 app.post("/api/v1/otp/enabled", async (c) => {
 	const { enabled } = (await c.req.json().catch(() => ({}))) as { enabled?: boolean };
