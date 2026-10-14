@@ -198,4 +198,20 @@ export const mailboxMigrations: Migration[] = [
             );
         `,
 	},
+	{
+		// Gmail accounts connected with "Sign in with Google" (OAuth / XOAUTH2).
+		name: "10_oauth_accounts",
+		sql: `
+            CREATE TABLE IF NOT EXISTS oauth_accounts (
+                account TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                email TEXT NOT NULL,
+                refresh_token TEXT NOT NULL,
+                access_token TEXT,
+                expires_at INTEGER,
+                last_error TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+        `,
+	},
 ];

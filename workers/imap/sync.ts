@@ -16,7 +16,9 @@ export interface ImapAccount {
 	host: string;
 	port: number;
 	user: string;
-	pass: string;
+	pass?: string;
+	/** Returns a fresh OAuth access token (XOAUTH2) instead of a password. */
+	accessToken?: () => Promise<string>;
 }
 
 export interface SyncState {
@@ -102,7 +104,8 @@ export async function syncAccount(acct: ImapAccount, store: SyncStore, opts: Syn
 	const c = new ImapClient(readable, writable);
 	try {
 		await c.greeting();
-		await c.login(acct.user, acct.pass);
+		if (acct.accessToken) await c.authenticateXOAuth2(acct.user, await acct.accessToken());
+		else await c.login(acct.user, acct.pass ?? "");
 		const isGmail = c.capabilities.has("X-GM-EXT-1");
 		const boxes = await findMailboxes(c);
 

@@ -3,9 +3,9 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 import { Badge, Button, Input, Loader, useKumoToastManager } from "@cloudflare/kumo";
-import { RobotIcon, ArrowCounterClockwiseIcon } from "@phosphor-icons/react";
+import { GoogleLogoIcon, TrashIcon, ArrowsClockwiseIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
-import { useParams } from "react-router";
+import { useParams, useSearchParams } from "react-router";
 import { useMailbox, useUpdateMailbox } from "~/queries/mailboxes";
 
 // Placeholder shown in the textarea when no custom prompt is set.
@@ -50,9 +50,6 @@ export default function SettingsRoute() {
 		}
 	};
 
-	const handleResetPrompt = () => {
-		setAgentPrompt("");
-	};
 
 	if (!mailbox) {
 		return (
@@ -62,7 +59,6 @@ export default function SettingsRoute() {
 		);
 	}
 
-	const isCustomPrompt = agentPrompt.trim().length > 0;
 
 	return (
 		<div className="max-w-2xl px-4 py-4 md:px-8 md:py-6 h-full overflow-y-auto">
@@ -84,47 +80,7 @@ export default function SettingsRoute() {
 					</div>
 				</div>
 
-				{/* Agent System Prompt */}
-				<div className="rounded-lg border border-kumo-line bg-kumo-base p-5">
-					<div className="flex items-center justify-between mb-4">
-						<div className="flex items-center gap-2">
-							<RobotIcon size={16} weight="duotone" className="text-kumo-subtle" />
-							<span className="text-sm font-medium text-kumo-default">
-								AI Agent Prompt
-							</span>
-							{isCustomPrompt ? (
-								<Badge variant="primary">Custom</Badge>
-							) : (
-								<Badge variant="secondary">Default</Badge>
-							)}
-						</div>
-						{isCustomPrompt && (
-							<Button
-								variant="ghost"
-								size="xs"
-								icon={<ArrowCounterClockwiseIcon size={14} />}
-								onClick={handleResetPrompt}
-							>
-								Reset to default
-							</Button>
-						)}
-					</div>
-					<p className="text-xs text-kumo-subtle mb-3">
-						Customize how the AI agent behaves for this mailbox.
-						Leave empty to use the built-in default prompt.
-					</p>
-					<textarea
-						value={agentPrompt}
-						onChange={(e) => setAgentPrompt(e.target.value)}
-						placeholder={PROMPT_PLACEHOLDER}
-						rows={12}
-						className="w-full resize-y rounded-lg border border-kumo-line bg-kumo-recessed px-3 py-2 text-xs text-kumo-default placeholder:text-kumo-subtle focus:outline-none focus:ring-1 focus:ring-kumo-ring font-mono leading-relaxed"
-					/>
-					<p className="text-xs text-kumo-subtle mt-2">
-						The prompt is sent as the system message to the AI model.
-						It controls the agent's personality, writing style, and behavior rules.
-					</p>
-				</div>
+				<SourceAccounts />
 
 				{/* Save */}
 				<div className="flex justify-end">
@@ -133,6 +89,124 @@ export default function SettingsRoute() {
 					</Button>
 				</div>
 			</div>
+		</div>
+	);
+}
+
+type SourceAccount = {
+	account: string;
+	email: string;
+	kind: "google" | "password";
+	initialDone: boolean;
+	lastRunAt: string | null;
+	error: string | null;
+};
+
+const CONNECT_ERRORS: Record<string, string> = {
+	access_denied: "已取消授权",
+	mail_scope_not_granted: "没有勾选「读取、撰写、发送和永久删除 Gmail 邮件」权限，请重新添加并勾选",
+	no_refresh_token: "Google 没有返回长期令牌，请重新添加一次",
+};
+
+function SourceAccounts() {
+	const toastManager = useKumoToastManager();
+	const [searchParams, setSearchParams] = useSearchParams();
+	const [accounts, setAccounts] = useState<SourceAccount[] | null>(null);
+	const [googleConfigured, setGoogleConfigured] = useState(true);
+	const [syncing, setSyncing] = useState(false);
+
+	const load = async () => {
+		const res = await fetch("/api/v1/accounts");
+		if (!res.ok) return;
+		const j = (await res.json()) as { accounts: SourceAccount[]; googleConfigured: boolean };
+		setAccounts(j.accounts);
+		setGoogleConfigured(j.googleConfigured);
+	};
+
+	useEffect(() => {
+		load();
+		const connected = searchParams.get("connected");
+		const err = searchParams.get("connect_error");
+		if (connected) toastManager.add({ title: `已添加 ${connected}，正在导入最近的邮件` });
+		if (err) toastManager.add({ title: `添加失败：${CONNECT_ERRORS[err] ?? err}`, variant: "error" });
+		if (connected || err) setSearchParams({}, { replace: true });
+		const t = setInterval(load, 15_000);
+		return () => clearInterval(t);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, []);
+
+	const remove = async (a: SourceAccount) => {
+		if (!confirm(`移除 ${a.email}？已导入的邮件会保留，但不再同步。`)) return;
+		await fetch(`/api/v1/accounts/${encodeURIComponent(a.account)}`, { method: "DELETE" });
+		load();
+	};
+
+	const syncNow = async () => {
+		setSyncing(true);
+		try {
+			await fetch("/api/v1/sync", { method: "POST" });
+			await load();
+		} finally {
+			setSyncing(false);
+		}
+	};
+
+	return (
+		<div className="rounded-lg border border-kumo-line bg-kumo-base p-5">
+			<div className="flex items-center justify-between mb-4">
+				<span className="text-sm font-medium text-kumo-default">邮箱来源</span>
+				<Button variant="ghost" size="xs" icon={<ArrowsClockwiseIcon size={14} />} onClick={syncNow} loading={syncing}>
+					立即同步
+				</Button>
+			</div>
+			{accounts === null ? (
+				<Loader />
+			) : (
+				<div className="space-y-2">
+					{accounts.length === 0 && <p className="text-xs text-kumo-subtle">还没有连接任何 Gmail。</p>}
+					{accounts.map((a) => (
+						<div key={a.account} className="flex items-center justify-between rounded-md border border-kumo-line px-3 py-2">
+							<div className="min-w-0">
+								<div className="text-sm text-kumo-default truncate">{a.email}</div>
+								<div className={`text-xs ${a.error ? "text-kumo-danger" : "text-kumo-subtle"}`}>
+									{a.error
+										? `同步出错：${a.error}`
+										: !a.lastRunAt
+											? "等待首次同步"
+											: a.initialDone
+												? `已同步 · ${new Date(a.lastRunAt).toLocaleString()}`
+												: "正在导入最近 90 天的邮件…"}
+								</div>
+							</div>
+							{a.kind === "google" ? (
+								<Button variant="ghost" size="xs" icon={<TrashIcon size={14} />} onClick={() => remove(a)}>
+									移除
+								</Button>
+							) : (
+								<Badge variant="secondary">应用密码</Badge>
+							)}
+						</div>
+					))}
+				</div>
+			)}
+			<div className="mt-4">
+				{googleConfigured ? (
+					<a
+						href="/oauth/google/start"
+						className="inline-flex items-center gap-2 rounded-md border border-kumo-line px-3 py-1.5 text-sm text-kumo-default hover:bg-kumo-recessed"
+					>
+						<GoogleLogoIcon size={16} weight="bold" />
+						用 Google 账号登录添加 Gmail
+					</a>
+				) : (
+					<p className="text-xs text-kumo-subtle">
+						需要先在 Worker 上设置 GOOGLE_CLIENT_ID 和 GOOGLE_CLIENT_SECRET。
+					</p>
+				)}
+			</div>
+			<p className="text-xs text-kumo-subtle mt-3">
+				Hotmail、linux.do、NodeSeek 等请设置转发到任意 @yuzh.de 地址。
+			</p>
 		</div>
 	);
 }

@@ -42,6 +42,7 @@ let commandsSeen: string[] = [];
 const server = net.createServer((sock) => {
 	let box = "";
 	let buf = "";
+	let pendingSaslFail = "";
 	const send = (s: string) => sock.write(s + "\r\n");
 	send("* OK [CAPABILITY IMAP4rev1 X-GM-EXT-1 MOVE UIDPLUS] Gimap ready");
 	sock.on("data", (d) => {
@@ -53,7 +54,13 @@ const server = net.createServer((sock) => {
 			const cmd = rest.join(" ");
 			commandsSeen.push(cmd);
 			const inbox = () => gmail.msgs.filter((m) => gmail.inBox(m, box)).sort((a, b) => a.uids[box] - b.uids[box]);
-			if (/^LOGIN /i.test(cmd)) {
+			if (/^AUTHENTICATE XOAUTH2 /i.test(cmd)) {
+				const dec = Buffer.from(cmd.split(" ")[2], "base64").toString();
+				if (dec === "user=me@gmail.com\x01auth=Bearer good-token\x01\x01") send(`${tag} OK [CAPABILITY IMAP4rev1 X-GM-EXT-1 MOVE UIDPLUS] me authenticated`);
+				else { send(`+ eyJzdGF0dXMiOiI0MDAifQ==`); pendingSaslFail = tag; }
+			} else if (pendingSaslFail && line === "") {
+				send(`${pendingSaslFail} NO [AUTHENTICATIONFAILED] Invalid credentials (Failure)`); pendingSaslFail = "";
+			} else if (/^LOGIN /i.test(cmd)) {
 				if (cmd.includes('"secret"')) send(`${tag} OK [CAPABILITY IMAP4rev1 X-GM-EXT-1 MOVE UIDPLUS] me authenticated`);
 				else send(`${tag} NO [AUTHENTICATIONFAILED] Invalid credentials`);
 			} else if (/^LIST /i.test(cmd)) {
@@ -168,6 +175,13 @@ gmail.msgs[0].seen = true;
 let s = await syncAccount({ ...acct, pass: "nope" }, store, { open });
 assert.match(s.error!, /LOGIN failed: NO/);
 console.log("✓ bad password reported:", s.error);
+
+// 1b. XOAUTH2: bad token → clean NO (continuation answered), good token → works
+s = await syncAccount({ ...acct, pass: undefined, accessToken: async () => "expired" }, store, { open, maxMessages: 0 });
+assert.match(s.error!, /AUTHENTICATE failed: NO/);
+s = await syncAccount({ ...acct, name: "oauth-probe", pass: undefined, accessToken: async () => "good-token" }, store, { open, maxMessages: 0 });
+assert.equal(s.error, undefined);
+console.log("✓ XOAUTH2 bad token reported, good token authenticates");
 
 // 2. initial import in batches of 3
 s = await run();

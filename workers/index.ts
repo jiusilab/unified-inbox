@@ -397,4 +397,98 @@ app.get("/api/v1/sync", async (c) => {
 	return c.json(await (stub as any).getSyncStatus());
 });
 
+// -- Connected source accounts ("Sign in with Google") ---------------
+
+app.get("/api/v1/accounts", async (c) => {
+	const stub = await ensureUnifiedMailbox(c.env);
+	return c.json({
+		accounts: await (stub as any).listAccounts(),
+		googleConfigured: Boolean(c.env.GOOGLE_CLIENT_ID && c.env.GOOGLE_CLIENT_SECRET),
+	});
+});
+
+app.delete("/api/v1/accounts/:account", async (c) => {
+	const stub = await ensureUnifiedMailbox(c.env);
+	return c.json(await (stub as any).removeOAuthAccount(decodeURIComponent(c.req.param("account"))));
+});
+
+const GOOGLE_SCOPE = "https://mail.google.com/ openid email";
+
+function oauthRedirectUri(c: Context) {
+	return `${new URL(c.req.url).origin}/oauth/google/callback`;
+}
+
+function settingsUrl(env: Env, query: string) {
+	return `/mailbox/${encodeURIComponent(unifiedMailboxId(env))}/settings?${query}`;
+}
+
+app.get("/oauth/google/start", (c) => {
+	if (!c.env.GOOGLE_CLIENT_ID || !c.env.GOOGLE_CLIENT_SECRET) {
+		return c.text("GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET are not set on this Worker.", 500);
+	}
+	const state = crypto.randomUUID();
+	const params = new URLSearchParams({
+		client_id: c.env.GOOGLE_CLIENT_ID,
+		redirect_uri: oauthRedirectUri(c),
+		response_type: "code",
+		scope: GOOGLE_SCOPE,
+		access_type: "offline",
+		prompt: "consent select_account",
+		include_granted_scopes: "true",
+		state,
+	});
+	c.header("Set-Cookie", `oauth_state=${state}; Path=/oauth; HttpOnly; Secure; SameSite=Lax; Max-Age=600`);
+	return c.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
+});
+
+app.get("/oauth/google/callback", async (c) => {
+	const url = new URL(c.req.url);
+	const cookieState = (c.req.header("cookie") || "").match(/(?:^|;\s*)oauth_state=([^;]+)/)?.[1];
+	const clear = "oauth_state=; Path=/oauth; HttpOnly; Secure; SameSite=Lax; Max-Age=0";
+	if (url.searchParams.get("error")) {
+		c.header("Set-Cookie", clear);
+		return c.redirect(settingsUrl(c.env, `connect_error=${encodeURIComponent(url.searchParams.get("error")!)}`));
+	}
+	const code = url.searchParams.get("code");
+	if (!code || !cookieState || cookieState !== url.searchParams.get("state")) {
+		return c.text("Invalid OAuth state. Start again from Settings.", 400);
+	}
+	const res = await fetch("https://oauth2.googleapis.com/token", {
+		method: "POST",
+		headers: { "content-type": "application/x-www-form-urlencoded" },
+		body: new URLSearchParams({
+			code,
+			client_id: c.env.GOOGLE_CLIENT_ID || "",
+			client_secret: c.env.GOOGLE_CLIENT_SECRET || "",
+			redirect_uri: oauthRedirectUri(c),
+			grant_type: "authorization_code",
+		}),
+	});
+	const tok = (await res.json()) as any;
+	c.header("Set-Cookie", clear);
+	if (!res.ok || !tok.access_token) {
+		return c.redirect(settingsUrl(c.env, `connect_error=${encodeURIComponent(tok.error || "token_exchange_failed")}`));
+	}
+	if (!String(tok.scope || "").includes("https://mail.google.com/")) {
+		return c.redirect(settingsUrl(c.env, "connect_error=mail_scope_not_granted"));
+	}
+	if (!tok.refresh_token) {
+		return c.redirect(settingsUrl(c.env, "connect_error=no_refresh_token"));
+	}
+	let email = "";
+	try {
+		const payload = JSON.parse(atob(String(tok.id_token).split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+		email = String(payload.email || "");
+	} catch {}
+	if (!email) return c.redirect(settingsUrl(c.env, "connect_error=no_email"));
+	const stub = await ensureUnifiedMailbox(c.env);
+	await (stub as any).addOAuthAccount({
+		email,
+		refreshToken: tok.refresh_token,
+		accessToken: tok.access_token,
+		expiresIn: Number(tok.expires_in || 3600),
+	});
+	return c.redirect(settingsUrl(c.env, `connected=${encodeURIComponent(email)}`));
+});
+
 export { app, receiveEmail };

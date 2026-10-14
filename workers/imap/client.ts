@@ -154,7 +154,7 @@ export class ImapClient {
 		}
 	}
 
-	async command(cmd: string, logAs?: string): Promise<ImapResult> {
+	async command(cmd: string, logAs?: string, onContinuation?: () => string): Promise<ImapResult> {
 		if (this.closed) throw new ImapError("IMAP connection closed");
 		const tag = `A${++this.tagCounter}`;
 		await this.write(`${tag} ${cmd}`);
@@ -172,6 +172,10 @@ export class ImapClient {
 				}
 				return result;
 			}
+			if (r.text.startsWith("+") && onContinuation) {
+				await this.write(onContinuation());
+				continue;
+			}
 			if (r.text.startsWith("+")) {
 				// We never send literals; a continuation request is unexpected.
 				throw new ImapError(`Unexpected continuation for ${logAs ?? cmd.split(" ")[0]}`);
@@ -185,6 +189,17 @@ export class ImapClient {
 
 	async login(user: string, pass: string): Promise<void> {
 		await this.command(`LOGIN ${quote(user)} ${quote(pass)}`, "LOGIN");
+		if (this.capabilities.size === 0 || !this.capabilities.has("IMAP4REV1")) {
+			const r = await this.command("CAPABILITY");
+			for (const u of r.untagged) this.parseCapabilities(u.text);
+		}
+	}
+
+	/** SASL XOAUTH2 (Gmail "Sign in with Google"). */
+	async authenticateXOAuth2(user: string, accessToken: string): Promise<void> {
+		const sasl = btoa(`user=${user}\u0001auth=Bearer ${accessToken}\u0001\u0001`);
+		// On failure Gmail sends a "+ <base64 json>" challenge; answer with an empty line to get the NO.
+		await this.command(`AUTHENTICATE XOAUTH2 ${sasl}`, "AUTHENTICATE", () => "");
 		if (this.capabilities.size === 0 || !this.capabilities.has("IMAP4REV1")) {
 			const r = await this.command("CAPABILITY");
 			for (const u of r.untagged) this.parseCapabilities(u.text);

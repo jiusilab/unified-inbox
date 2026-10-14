@@ -1057,7 +1057,7 @@ export class MailboxDO extends DurableObject<Env> {
 		};
 
 		const results: SyncSummary[] = [];
-		for (const acct of this.#accounts()) {
+		for (const acct of [...this.#accounts(), ...this.#oauthAccounts()]) {
 			const summary = await syncAccount(acct, store, {
 				open: () => {
 					const socket = connect({ hostname: acct.host, port: acct.port }, { secureTransport: "on", allowHalfOpen: false });
@@ -1077,6 +1077,101 @@ export class MailboxDO extends DurableObject<Env> {
 			if (!summary.error && summary.remaining > 0) this.ctx.storage.setAlarm(Date.now() + 15_000);
 		}
 		return results;
+	}
+
+	// ── "Sign in with Google" accounts ───────────────────────────
+
+	#oauthAccounts(): ImapAccount[] {
+		const rows = [...this.ctx.storage.sql.exec(`SELECT account, email FROM oauth_accounts WHERE provider = 'google'`)] as any[];
+		return rows.map((r) => ({
+			name: String(r.account),
+			host: "imap.gmail.com",
+			port: 993,
+			user: String(r.email),
+			accessToken: () => this.#googleAccessToken(String(r.account)),
+		}));
+	}
+
+	async #googleAccessToken(account: string): Promise<string> {
+		const sqlx = this.ctx.storage.sql;
+		const r = [...sqlx.exec(`SELECT refresh_token, access_token, expires_at FROM oauth_accounts WHERE account = ?`, account)][0] as any;
+		if (!r) throw new Error(`unknown account ${account}`);
+		if (r.access_token && Number(r.expires_at) > Date.now() + 60_000) return String(r.access_token);
+		const env = this.env as any;
+		const res = await fetch("https://oauth2.googleapis.com/token", {
+			method: "POST",
+			headers: { "content-type": "application/x-www-form-urlencoded" },
+			body: new URLSearchParams({
+				client_id: env.GOOGLE_CLIENT_ID || "",
+				client_secret: env.GOOGLE_CLIENT_SECRET || "",
+				refresh_token: String(r.refresh_token),
+				grant_type: "refresh_token",
+			}),
+		});
+		const j = (await res.json()) as any;
+		if (!res.ok || !j.access_token) {
+			const err = `token refresh failed: ${j.error || res.status} ${j.error_description || ""}`.trim();
+			sqlx.exec(`UPDATE oauth_accounts SET last_error = ? WHERE account = ?`, err, account);
+			throw new Error(err);
+		}
+		sqlx.exec(
+			`UPDATE oauth_accounts SET access_token = ?, expires_at = ?, last_error = NULL WHERE account = ?`,
+			j.access_token, Date.now() + Number(j.expires_in || 3600) * 1000, account,
+		);
+		return String(j.access_token);
+	}
+
+	async addOAuthAccount(a: { email: string; refreshToken: string; accessToken: string; expiresIn: number }) {
+		const account = `gmail:${a.email.toLowerCase()}`;
+		this.ctx.storage.sql.exec(
+			`INSERT INTO oauth_accounts (account, provider, email, refresh_token, access_token, expires_at)
+			 VALUES (?, 'google', ?, ?, ?, ?)
+			 ON CONFLICT(account) DO UPDATE SET refresh_token = excluded.refresh_token, access_token = excluded.access_token,
+			   expires_at = excluded.expires_at, last_error = NULL`,
+			account, a.email.toLowerCase(), a.refreshToken, a.accessToken, Date.now() + a.expiresIn * 1000,
+		);
+		// Start the first import right away.
+		this.ctx.storage.setAlarm(Date.now() + 1_000);
+		return account;
+	}
+
+	async removeOAuthAccount(account: string) {
+		const sqlx = this.ctx.storage.sql;
+		const r = [...sqlx.exec(`SELECT refresh_token FROM oauth_accounts WHERE account = ?`, account)][0] as any;
+		sqlx.exec(`DELETE FROM oauth_accounts WHERE account = ?`, account);
+		sqlx.exec(`DELETE FROM imap_state WHERE account = ?`, account);
+		sqlx.exec(`DELETE FROM imap_ops WHERE account = ?`, account);
+		// Emails already imported stay; they just stop syncing.
+		sqlx.exec(`UPDATE emails SET source_folder = 'DISCONNECTED' WHERE source = ?`, account);
+		if (r?.refresh_token) {
+			try {
+				await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(String(r.refresh_token))}`, { method: "POST" });
+			} catch {}
+		}
+		return { ok: true };
+	}
+
+	async listAccounts() {
+		const sqlx = this.ctx.storage.sql;
+		const state = new Map(
+			([...sqlx.exec(`SELECT account, initial_done, last_run_at, last_summary FROM imap_state`)] as any[]).map((r) => [String(r.account), r]),
+		);
+		const view = (account: string, email: string, kind: string, lastError?: string | null) => {
+			const st = state.get(account);
+			let summary: any = null;
+			try { summary = st?.last_summary ? JSON.parse(st.last_summary) : null; } catch {}
+			return {
+				account, email, kind,
+				initialDone: st ? Number(st.initial_done) === 1 : false,
+				lastRunAt: st?.last_run_at ?? null,
+				error: lastError || summary?.error || null,
+			};
+		};
+		const out = this.#accounts().map((a) => view(a.name, a.user, "password"));
+		for (const r of [...sqlx.exec(`SELECT account, email, last_error FROM oauth_accounts ORDER BY created_at`)] as any[]) {
+			out.push(view(String(r.account), String(r.email), "google", r.last_error));
+		}
+		return out;
 	}
 
 	async getSyncStatus() {

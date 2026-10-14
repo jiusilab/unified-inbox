@@ -9,4 +9,7 @@ export interface Env extends Cloudflare.Env {
 	EMAIL?: any;
 	IMAP_GMAIL_USER?: string;
 	IMAP_GMAIL_PASS?: string;
+	/** Google OAuth client for "Sign in with Google" Gmail accounts. */
+	GOOGLE_CLIENT_ID?: string;
+	GOOGLE_CLIENT_SECRET?: string;
 }
