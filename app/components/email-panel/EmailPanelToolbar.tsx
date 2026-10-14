@@ -91,7 +91,7 @@ export default function EmailPanelToolbar({
 						Edit
 					</Button>
 				</>
-			) : (
+			) : false ? (
 				<>
 					<Tooltip content="Reply" side="bottom" asChild>
 						<Button
@@ -124,7 +124,7 @@ export default function EmailPanelToolbar({
 						/>
 					</Tooltip>
 				</>
-			)}
+			) : null}
 
 			<div className="h-5 w-px bg-kumo-fill mx-0.5" />
 

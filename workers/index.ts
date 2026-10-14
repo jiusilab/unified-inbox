@@ -83,6 +83,12 @@ app.use("/api/*", cors({
 }));
 app.use("/api/v1/mailboxes/:mailboxId/*", requireMailbox);
 
+// Receive-only deployment: refuse anything that would send mail.
+const sendBlocked = (c: Context) => c.json({ error: "Sending is disabled on this unified inbox (receive-only)." }, 403);
+app.post("/api/v1/mailboxes/:mailboxId/emails", sendBlocked);
+app.post("/api/v1/mailboxes/:mailboxId/emails/:id/reply", sendBlocked);
+app.post("/api/v1/mailboxes/:mailboxId/emails/:id/forward", sendBlocked);
+
 // -- Config ---------------------------------------------------------
 
 app.get("/api/v1/config", (c) => {
@@ -345,68 +351,50 @@ async function streamToArrayBuffer(stream: ReadableStream, streamSize: number) {
 	return result;
 }
 
-async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env: Env, ctx: ExecutionContext) {
-	const rawEmail = await streamToArrayBuffer(event.raw, event.rawSize);
-	const parsedEmail = await new PostalMime().parse(rawEmail);
-
-	if (!parsedEmail.to?.length || !parsedEmail.to[0].address) throw new Error("received email with empty to");
-
-	const allowedAddresses = ((env.EMAIL_ADDRESSES ?? []) as string[]).map((a) => a.toLowerCase());
-	const allRecipients = parsedEmail.to.map((t) => t.address?.toLowerCase()).filter(Boolean) as string[];
-	const ccRecipients = (parsedEmail.cc || []).map((e) => e.address?.toLowerCase()).filter(Boolean) as string[];
-	const bccRecipients = (parsedEmail.bcc || []).map((e) => e.address?.toLowerCase()).filter(Boolean) as string[];
-
-	let mailboxId: string | undefined;
-	if (allowedAddresses.length > 0) {
-		mailboxId = allRecipients.find((addr) => allowedAddresses.includes(addr));
-		if (!mailboxId) { console.log(`Ignoring email: no recipient matches EMAIL_ADDRESSES.`); return; }
-	} else { mailboxId = allRecipients[0]; }
-	if (!mailboxId) throw new Error("received email with no valid recipient address");
-
-	const messageId = crypto.randomUUID();
-	if (!(await env.BUCKET.head(`mailboxes/${mailboxId}.json`))) { console.log(`Ignoring email for ${mailboxId}: mailbox does not exist`); return; }
-
-	const stub = env.MAILBOX.get(env.MAILBOX.idFromName(mailboxId));
-
-	const attachmentData: StoredAttachment[] = [];
-	if (parsedEmail.attachments) {
-		for (const att of parsedEmail.attachments) {
-			const attId = crypto.randomUUID();
-			const filename = (att.filename || "untitled").replace(/[\/\\:*?"<>|\x00-\x1f]/g, "_");
-			await env.BUCKET.put(`attachments/${messageId}/${attId}/${filename}`, att.content);
-			attachmentData.push({ id: attId, email_id: messageId, filename, mimetype: att.mimeType,
-				size: typeof att.content === "string" ? att.content.length : att.content.byteLength,
-				content_id: att.contentId || null, disposition: att.disposition || "attachment" });
-		}
-	}
-
-	const extractMsgId = (s: string) => { const m = s.match(/<([^>]+)>/); return m ? m[1] : s.trim().split(/\s+/)[0]; };
-	const inReplyTo = parsedEmail.inReplyTo ? extractMsgId(parsedEmail.inReplyTo) : null;
-	const emailReferences = parsedEmail.references ? parsedEmail.references.split(/\s+/).filter(Boolean).map(extractMsgId) : [];
-	let threadId = emailReferences[0] || inReplyTo || messageId;
-
-	if (!inReplyTo && emailReferences.length === 0) {
-		const subjectThread = await (stub as any).findThreadBySubject(parsedEmail.subject || "", parsedEmail.from?.address || undefined);
-		if (subjectThread) threadId = subjectThread;
-	}
-
-	const originalMessageId = parsedEmail.messageId ? extractMsgId(parsedEmail.messageId) : null;
-
-	await stub.createEmail(Folders.INBOX, {
-		id: messageId, subject: parsedEmail.subject || "",
-		sender: (parsedEmail.from?.address || "").toLowerCase(), recipient: allRecipients.join(", "),
-		cc: ccRecipients.join(", ") || null, bcc: bccRecipients.join(", ") || null,
-		date: new Date().toISOString(), // uses receive time, not the email's Date header
-		body: parsedEmail.html || parsedEmail.text || "",
-		in_reply_to: inReplyTo, email_references: emailReferences.length > 0 ? JSON.stringify(emailReferences) : null,
-		thread_id: threadId, message_id: originalMessageId, raw_headers: JSON.stringify(parsedEmail.headers),
-	}, attachmentData);
-
-	const agentStub = env.EMAIL_AGENT.get(env.EMAIL_AGENT.idFromName(mailboxId));
-	ctx.waitUntil(agentStub.fetch(new Request("https://agents/onNewEmail", {
-		method: "POST", headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ mailboxId, emailId: messageId, sender: (parsedEmail.from?.address || "").toLowerCase(), subject: parsedEmail.subject || "", threadId }),
-	})).catch((e) => console.error("Auto-draft trigger failed:", (e as Error).message)));
+/** The single mailbox everything is collected into (unified inbox). */
+export function unifiedMailboxId(env: Env): string {
+	const v = ((env as any).UNIFIED_MAILBOX as string | undefined)?.trim().toLowerCase();
+	if (v) return v;
+	const domain = (env.DOMAINS || "").split(",")[0]?.trim() || "example.com";
+	return `inbox@${domain}`;
 }
+
+/** Make sure the unified mailbox exists (settings file in R2 + DO initialised). */
+export async function ensureUnifiedMailbox(env: Env) {
+	const id = unifiedMailboxId(env);
+	const key = `mailboxes/${id}.json`;
+	if (!(await env.BUCKET.head(key))) {
+		await env.BUCKET.put(key, JSON.stringify({
+			fromName: "Unified Inbox", forwarding: { enabled: false, email: "" },
+			signature: { enabled: false, text: "" }, autoReply: { enabled: false, subject: "", message: "" },
+		}));
+	}
+	return env.MAILBOX.get(env.MAILBOX.idFromName(id));
+}
+
+/**
+ * Inbound mail from Email Routing. Everything (own domain, Hotmail / forum
+ * forwards) lands in the unified mailbox. The Worker only buffers the bytes;
+ * parsing happens inside the Durable Object to stay within the Free plan's
+ * 10 ms Worker CPU limit.
+ */
+async function receiveEmail(event: { raw: ReadableStream; rawSize: number; to?: string; from?: string }, env: Env, _ctx: ExecutionContext) {
+	const rawEmail = await streamToArrayBuffer(event.raw, event.rawSize);
+	const stub = await ensureUnifiedMailbox(env);
+	await (stub as any).ingestRaw(rawEmail, { source: "routing", envelopeTo: event.to ?? null });
+}
+
+// -- Sync (manual trigger + status) ----------------------------------
+
+app.post("/api/v1/sync", async (c) => {
+	const stub = await ensureUnifiedMailbox(c.env);
+	const results = await (stub as any).syncImap();
+	return c.json({ results });
+});
+
+app.get("/api/v1/sync", async (c) => {
+	const stub = await ensureUnifiedMailbox(c.env);
+	return c.json(await (stub as any).getSyncStatus());
+});
 
 export { app, receiveEmail };

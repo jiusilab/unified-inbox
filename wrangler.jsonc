@@ -1,8 +1,11 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "agentic-inbox",
+	"name": "unified-inbox",
 	"compatibility_date": "2025-11-28",
 	"main": "./workers/app.ts",
+	"triggers": {
+		"crons": ["*/5 * * * *"]
+	},
 	"observability": {
 		"enabled": true
 	},
@@ -13,20 +16,19 @@
 		// Production deploys must also define POLICY_AUD and TEAM_DOMAIN.
 		// TEAM_DOMAIN may be the base Access URL or the full /cdn-cgi/access/certs URL.
 		// The worker now fails closed outside local development if Access is not configured.
-		"DOMAINS": "example.com",
-		"EMAIL_ADDRESSES": []
+		"DOMAINS": "yuzh.de",
+		"EMAIL_ADDRESSES": [],
+		// Everything is collected into this one mailbox.
+		"UNIFIED_MAILBOX": "inbox@yuzh.de",
+		// IMAP sources. Credentials are Worker secrets: IMAP_GMAIL_USER, IMAP_GMAIL_PASS (app password).
+		"IMAP_ACCOUNTS": "gmail",
+		"IMAP_INITIAL_DAYS": "90"
 	},
-	"send_email": [
-		{
-			"name": "EMAIL",
-			"remote": true
-		}
-	],
 	"r2_buckets": [
 		{
 			"binding": "BUCKET",
-			"bucket_name": "agentic-inbox",
-			"preview_bucket_name": "agentic-inbox"
+			"bucket_name": "unified-inbox",
+			"preview_bucket_name": "unified-inbox"
 		}
 	],
 	"ai": {

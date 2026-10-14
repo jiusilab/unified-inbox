@@ -5,4 +5,8 @@
 export interface Env extends Cloudflare.Env {
 	POLICY_AUD: string;
 	TEAM_DOMAIN: string;
+	/** send_email binding removed (receive-only deployment); kept optional for legacy code paths. */
+	EMAIL?: any;
+	IMAP_GMAIL_USER?: string;
+	IMAP_GMAIL_PASS?: string;
 }

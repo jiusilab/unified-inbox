@@ -119,7 +119,7 @@ export default function Header() {
 			)}
 
 			<div className="flex items-center gap-1 ml-auto shrink-0">
-				<Tooltip content={isAgentPanelOpen ? "Hide agent panel" : "Show agent panel"} side="bottom" asChild>
+				{false && <Tooltip content={isAgentPanelOpen ? "Hide agent panel" : "Show agent panel"} side="bottom" asChild>
 					<Button
 						variant={isAgentPanelOpen ? "secondary" : "ghost"}
 						shape="square"
@@ -128,7 +128,7 @@ export default function Header() {
 						aria-label="Toggle agent panel"
 						className="hidden lg:inline-flex"
 					/>
-				</Tooltip>
+				</Tooltip>}
 				<Tooltip content="Settings" side="bottom" asChild>
 					<Button
 						variant={isSettingsActive ? "secondary" : "ghost"}

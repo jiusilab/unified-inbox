@@ -10,6 +10,9 @@ import * as schema from "../db/schema";
 import { Folders } from "../../shared/folders";
 import type { Env } from "../types";
 import { applyMigrations, mailboxMigrations } from "./migrations";
+import PostalMime from "postal-mime";
+import { connect } from "cloudflare:sockets";
+import { syncAccount, type IngestMeta, type OpKind, type SyncStore, type SyncSummary, type ImapAccount } from "../imap/sync";
 
 /**
  * SQL expression to normalize email subjects by stripping common
@@ -445,6 +448,8 @@ export class MailboxDO extends DurableObject<Env> {
 
 		if (!email) return null;
 
+		this.#queueSourceOp(id, "trash");
+
 		const emailAttachments = this.db
 			.select()
 			.from(schema.attachments)
@@ -639,6 +644,10 @@ export class MailboxDO extends DurableObject<Env> {
 			.get();
 
 		if (!folder) return false;
+
+		if (folderId === Folders.TRASH || folderId === "spam") this.#queueSourceOp(id, "trash");
+		else if (folderId === Folders.ARCHIVE) this.#queueSourceOp(id, "archive");
+		else if (folderId === Folders.INBOX) this.#queueSourceOp(id, "inbox");
 
 		this.db
 			.update(schema.emails)
@@ -868,5 +877,212 @@ export class MailboxDO extends DurableObject<Env> {
 		if (attachments.length > 0) {
 			this.db.insert(schema.attachments).values(attachments).run();
 		}
+	}
+
+	// ── Unified inbox: raw ingest + IMAP source sync ───────────────
+
+	/**
+	 * Parse a raw RFC822 message and store it in the Inbox.
+	 * Runs inside the Durable Object so MIME parsing does not count against the
+	 * calling Worker's (Free plan: 10 ms) CPU budget.
+	 */
+	async ingestRaw(raw: Uint8Array, meta: IngestMeta): Promise<"new" | "dup" | "skipped"> {
+		const parsed = await new PostalMime().parse(raw);
+		const extractMsgId = (v: string) => { const m = v.match(/<([^>]+)>/); return m ? m[1] : v.trim().split(/\s+/)[0]; };
+		const originalMessageId = parsed.messageId ? extractMsgId(parsed.messageId) : null;
+
+		// Dedup by Message-ID (forwarding + IMAP during migration, rescans, restores)
+		if (originalMessageId) {
+			const existing = [...this.ctx.storage.sql.exec(
+				`SELECT id, source FROM emails WHERE message_id = ? LIMIT 1`, originalMessageId,
+			)][0] as { id: string; source: string | null } | undefined;
+			if (existing) {
+				if (meta.sourceUid !== undefined && (existing.source === null || existing.source === meta.source)) {
+					this.ctx.storage.sql.exec(
+						`UPDATE emails SET source = ?, source_uid = ?, source_folder = ?, source_msgid = COALESCE(?, source_msgid) WHERE id = ?`,
+						meta.source, meta.sourceUid, meta.sourceFolder ?? "INBOX", meta.gmMsgId ?? null, existing.id,
+					);
+				}
+				return "dup";
+			}
+		}
+
+		const messageId = crypto.randomUUID();
+		const attachmentData: { id: string; email_id: string; filename: string; mimetype: string; size: number; content_id: string | null; disposition: string }[] = [];
+		for (const att of parsed.attachments || []) {
+			const attId = crypto.randomUUID();
+			const filename = (att.filename || "untitled").replace(/[\/\\:*?"<>|\x00-\x1f]/g, "_");
+			await this.env.BUCKET.put(`attachments/${messageId}/${attId}/${filename}`, att.content);
+			attachmentData.push({
+				id: attId, email_id: messageId, filename, mimetype: att.mimeType,
+				size: typeof att.content === "string" ? att.content.length : att.content.byteLength,
+				content_id: att.contentId || null, disposition: att.disposition || "attachment",
+			});
+		}
+
+		const inReplyTo = parsed.inReplyTo ? extractMsgId(parsed.inReplyTo) : null;
+		const references = parsed.references ? parsed.references.split(/\s+/).filter(Boolean).map(extractMsgId) : [];
+		let threadId = references[0] || inReplyTo || messageId;
+		if (!inReplyTo && references.length === 0) {
+			const t = await this.findThreadBySubject(parsed.subject || "", parsed.from?.address || undefined);
+			if (t) threadId = t;
+		}
+
+		const lower = (list?: { address?: string }[]) =>
+			(list || []).map((a) => a.address?.toLowerCase()).filter(Boolean).join(", ");
+		let recipient = lower(parsed.to as any);
+		if (meta.envelopeTo && !recipient.includes(meta.envelopeTo.toLowerCase())) {
+			recipient = recipient ? `${recipient}, ${meta.envelopeTo.toLowerCase()}` : meta.envelopeTo.toLowerCase();
+		}
+
+		let date = meta.internalDate || null;
+		if (!date && parsed.date) {
+			const d = new Date(parsed.date);
+			if (!Number.isNaN(d.getTime())) date = d.toISOString();
+		}
+		if (!date) date = new Date().toISOString();
+
+		await this.createEmail(Folders.INBOX, {
+			id: messageId,
+			subject: parsed.subject || "",
+			sender: (parsed.from?.address || "").toLowerCase(),
+			recipient,
+			cc: lower(parsed.cc as any) || null,
+			bcc: lower(parsed.bcc as any) || null,
+			date,
+			read: meta.seen ? 1 : 0,
+			body: parsed.html || parsed.text || "",
+			in_reply_to: inReplyTo,
+			email_references: references.length ? JSON.stringify(references) : null,
+			thread_id: threadId,
+			message_id: originalMessageId,
+			raw_headers: JSON.stringify(parsed.headers),
+		} as any, attachmentData);
+
+		if (meta.sourceUid !== undefined) {
+			this.ctx.storage.sql.exec(
+				`UPDATE emails SET source = ?, source_uid = ?, source_folder = ?, source_msgid = ? WHERE id = ?`,
+				meta.source, meta.sourceUid, meta.sourceFolder ?? "INBOX", meta.gmMsgId ?? null, messageId,
+			);
+		}
+		return "new";
+	}
+
+	/** Queue a Gmail-side action for an email that came from an IMAP source. */
+	#queueSourceOp(emailId: string, op: OpKind) {
+		const row = [...this.ctx.storage.sql.exec(
+			`SELECT source, source_msgid, source_folder FROM emails WHERE id = ?`, emailId,
+		)][0] as { source: string | null; source_msgid: string | null; source_folder: string | null } | undefined;
+		if (!row?.source || !row.source_msgid) return;
+		const target = op === "trash" ? "TRASH" : op === "archive" ? "ARCHIVE" : "RESTORING";
+		if (row.source_folder === target || (op === "inbox" && row.source_folder === "INBOX")) return;
+		this.ctx.storage.sql.exec(
+			`INSERT INTO imap_ops (account, op, gm_msgid) VALUES (?, ?, ?)`, row.source, op, row.source_msgid,
+		);
+		this.ctx.storage.sql.exec(`UPDATE emails SET source_folder = ? WHERE id = ?`, target, emailId);
+		// Push it to Gmail shortly instead of waiting for the next cron run.
+		this.ctx.storage.setAlarm(Date.now() + 2_000);
+	}
+
+	async alarm() {
+		await this.syncImap();
+	}
+
+	#syncing: Promise<SyncSummary[]> | null = null;
+
+	/** Run one bounded sync pass for every configured IMAP account. */
+	async syncImap(): Promise<SyncSummary[]> {
+		if (this.#syncing) return this.#syncing;
+		this.#syncing = this.#runSync().finally(() => { this.#syncing = null; });
+		return this.#syncing;
+	}
+
+	#accounts(): ImapAccount[] {
+		const env = this.env as unknown as Record<string, string | undefined>;
+		const names = (env.IMAP_ACCOUNTS || "").split(",").map((s) => s.trim()).filter(Boolean);
+		const out: ImapAccount[] = [];
+		for (const name of names) {
+			const key = name.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+			const user = env[`IMAP_${key}_USER`];
+			const pass = env[`IMAP_${key}_PASS`];
+			if (!user || !pass) continue;
+			out.push({
+				name: name.toLowerCase(),
+				host: env[`IMAP_${key}_HOST`] || "imap.gmail.com",
+				port: Number(env[`IMAP_${key}_PORT`] || 993),
+				user,
+				pass: pass.replace(/\s+/g, ""),
+			});
+		}
+		return out;
+	}
+
+	async #runSync(): Promise<SyncSummary[]> {
+		const sqlx = this.ctx.storage.sql;
+		const store: SyncStore = {
+			getState: (account) => {
+				const r = [...sqlx.exec(`SELECT uid_validity, last_uid, initial_done FROM imap_state WHERE account = ?`, account)][0] as any;
+				return r ? { uidValidity: Number(r.uid_validity), lastUid: Number(r.last_uid), initialDone: Number(r.initial_done) === 1 } : null;
+			},
+			setState: (account, st) => {
+				sqlx.exec(
+					`INSERT INTO imap_state (account, uid_validity, last_uid, initial_done) VALUES (?, ?, ?, ?)
+					 ON CONFLICT(account) DO UPDATE SET uid_validity = excluded.uid_validity, last_uid = excluded.last_uid, initial_done = excluded.initial_done`,
+					account, st.uidValidity, st.lastUid, st.initialDone ? 1 : 0,
+				);
+			},
+			ingest: (raw, meta) => this.ingestRaw(raw, meta),
+			pendingOps: (account, limit) =>
+				[...sqlx.exec(
+					`SELECT id, op, gm_msgid FROM imap_ops WHERE account = ? AND attempts < 5 ORDER BY id LIMIT ?`, account, limit,
+				)].map((r: any) => ({ id: Number(r.id), op: r.op as OpKind, gmMsgId: String(r.gm_msgid) })),
+			finishOp: (id, error) => {
+				if (!error) sqlx.exec(`DELETE FROM imap_ops WHERE id = ?`, id);
+				else sqlx.exec(`UPDATE imap_ops SET attempts = attempts + 1, last_error = ? WHERE id = ?`, error.slice(0, 500), id);
+			},
+			trackedInbox: (account) =>
+				[...sqlx.exec(
+					`SELECT id, source_uid, source_msgid FROM emails WHERE source = ? AND source_folder = 'INBOX'`, account,
+				)].map((r: any) => ({ emailId: String(r.id), uid: Number(r.source_uid), gmMsgId: r.source_msgid ? String(r.source_msgid) : null })),
+			resetTracking: (account) => {
+				sqlx.exec(`UPDATE emails SET source_folder = 'STALE' WHERE source = ? AND source_folder = 'INBOX'`, account);
+			},
+			sourceLeftInbox: (emailId, where) => {
+				const folder = where === "archive" ? Folders.ARCHIVE : Folders.TRASH;
+				sqlx.exec(
+					`UPDATE emails SET source_folder = ?, folder_id = CASE WHEN folder_id = 'inbox' OR ? = 'trash' THEN ? ELSE folder_id END WHERE id = ?`,
+					where === "archive" ? "ARCHIVE" : "TRASH", folder, folder, emailId,
+				);
+			},
+		};
+
+		const results: SyncSummary[] = [];
+		for (const acct of this.#accounts()) {
+			const summary = await syncAccount(acct, store, {
+				open: () => {
+					const socket = connect({ hostname: acct.host, port: acct.port }, { secureTransport: "on", allowHalfOpen: false });
+					return { readable: socket.readable, writable: socket.writable };
+				},
+				initialDays: Number((this.env as any).IMAP_INITIAL_DAYS || 90),
+				maxMessages: 15,
+				budgetMs: 25_000,
+				log: (m) => console.log(`[imap ${acct.name}] ${m}`),
+			});
+			sqlx.exec(
+				`UPDATE imap_state SET last_run_at = ?, last_summary = ? WHERE account = ?`,
+				new Date().toISOString(), JSON.stringify(summary), acct.name,
+			);
+			results.push(summary);
+			// More to do (initial import, or ops left)? Keep going soon via alarm.
+			if (!summary.error && summary.remaining > 0) this.ctx.storage.setAlarm(Date.now() + 15_000);
+		}
+		return results;
+	}
+
+	async getSyncStatus() {
+		return {
+			accounts: [...this.ctx.storage.sql.exec(`SELECT account, uid_validity, last_uid, initial_done, last_run_at, last_summary FROM imap_state`)],
+			pendingOps: [...this.ctx.storage.sql.exec(`SELECT id, account, op, attempts, last_error, created_at FROM imap_ops ORDER BY id`)],
+		};
 	}
 }

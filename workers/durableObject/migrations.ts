@@ -168,4 +168,34 @@ export const mailboxMigrations: Migration[] = [
             CREATE INDEX IF NOT EXISTS idx_emails_folder_date ON emails(folder_id, date DESC);
         `,
 	},
+	{
+		// Unified inbox: remember where an email came from (IMAP source) and
+		// queue local actions that must be mirrored back to the source mailbox.
+		name: "9_unified_inbox_sources",
+		sql: `
+            ALTER TABLE emails ADD COLUMN source TEXT;
+            ALTER TABLE emails ADD COLUMN source_uid INTEGER;
+            ALTER TABLE emails ADD COLUMN source_folder TEXT;
+            ALTER TABLE emails ADD COLUMN source_msgid TEXT;
+            CREATE INDEX IF NOT EXISTS idx_emails_message_id ON emails(message_id);
+            CREATE INDEX IF NOT EXISTS idx_emails_source ON emails(source, source_folder);
+            CREATE TABLE IF NOT EXISTS imap_state (
+                account TEXT PRIMARY KEY,
+                uid_validity INTEGER NOT NULL,
+                last_uid INTEGER NOT NULL,
+                initial_done INTEGER NOT NULL DEFAULT 0,
+                last_run_at TEXT,
+                last_summary TEXT
+            );
+            CREATE TABLE IF NOT EXISTS imap_ops (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account TEXT NOT NULL,
+                op TEXT NOT NULL,
+                gm_msgid TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+        `,
+	},
 ];

@@ -6,7 +6,7 @@ import { routeAgentRequest } from "agents";
 import { Hono } from "hono";
 import { jwtVerify, createRemoteJWKSet } from "jose";
 import { createRequestHandler } from "react-router";
-import { app as apiApp, receiveEmail } from "./index";
+import { app as apiApp, receiveEmail, ensureUnifiedMailbox } from "./index";
 import { EmailMCP } from "./mcp";
 import type { Env } from "./types";
 
@@ -82,13 +82,7 @@ app.use("*", async (c, next) => {
 
 // MCP server endpoint — used by AI coding tools (ProtoAgent, Claude Code, Cursor, etc.)
 // Must be before API routes and React Router catch-all
-const mcpHandler = EmailMCP.serve("/mcp", { binding: "EMAIL_MCP" });
-app.all("/mcp", async (c) => {
-	return mcpHandler.fetch(c.req.raw, c.env, c.executionCtx as ExecutionContext);
-});
-app.all("/mcp/*", async (c) => {
-	return mcpHandler.fetch(c.req.raw, c.env, c.executionCtx as ExecutionContext);
-});
+// MCP endpoint disabled for the unified inbox (receive-only, no external agents).
 
 // Mount the API routes
 app.route("/", apiApp);
@@ -110,8 +104,14 @@ app.all("*", (c) => {
 // Export the Hono app as the default export with an email handler
 export default {
 	fetch: app.fetch,
+	async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+		// Hand the whole IMAP sync to the Durable Object (its own CPU budget).
+		const stub = await ensureUnifiedMailbox(env);
+		const results = await (stub as any).syncImap();
+		console.log("imap sync", JSON.stringify(results));
+	},
 	async email(
-		event: { raw: ReadableStream; rawSize: number },
+		event: { raw: ReadableStream; rawSize: number; to?: string; from?: string },
 		env: Env,
 		ctx: ExecutionContext,
 	) {

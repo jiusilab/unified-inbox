@@ -70,7 +70,7 @@ export default function MailboxRoute() {
 			</div>
 
 			{/* Agent + MCP sidebar -- togglable on desktop */}
-			{isAgentPanelOpen && (
+			{false && isAgentPanelOpen && (
 				<div className="hidden lg:flex w-[380px] shrink-0 border-l border-kumo-line flex-col bg-kumo-base overflow-hidden">
 					<AgentSidebar />
 				</div>
