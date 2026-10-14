@@ -6,7 +6,7 @@ import { routeAgentRequest } from "agents";
 import { Hono } from "hono";
 import { jwtVerify, createRemoteJWKSet } from "jose";
 import { createRequestHandler } from "react-router";
-import { app as apiApp, receiveEmail, ensureUnifiedMailbox } from "./index";
+import { app as apiApp, receiveEmail, ensureUnifiedMailbox, unifiedMailboxId } from "./index";
 import { EmailMCP } from "./mcp";
 import type { Env } from "./types";
 
@@ -41,6 +41,66 @@ function getAccessUrls(teamDomain: string) {
 
 // Main app that wraps the API and adds React Router fallback
 const app = new Hono<{ Bindings: Env }>();
+
+// ── Read-only agent API (bearer token, no Access) ─────────────────
+// Served on the dedicated AGENT_API_HOST; that host serves nothing else.
+const agentApi = new Hono<{ Bindings: Env }>();
+agentApi.use("*", async (c, next) => {
+	const auth = c.req.header("authorization") || "";
+	const token = auth.replace(/^Bearer\s+/i, "").trim();
+	if (!token) return c.json({ error: "missing bearer token" }, 401);
+	const stub = unifiedStub(c.env) as any;
+	const scope = await stub.agentAuth(token);
+	if (!scope) return c.json({ error: "invalid token" }, 401);
+	c.set("scope" as never, scope as never);
+	await next();
+});
+const clampLimit = (v: string | undefined, d: number) => Math.min(Math.max(Number(v) || d, 1), 100);
+function parseSince(v: string | undefined): string | null | undefined {
+	if (!v) return null;
+	if (/^\d+$/.test(v)) {
+		const n = Number(v);
+		return new Date(n < 1e12 ? n * 1000 : n).toISOString();
+	}
+	const t = Date.parse(v);
+	return Number.isFinite(t) ? new Date(t).toISOString() : undefined;
+}
+agentApi.get("/api/everest/inbox", async (c) => {
+	const since = parseSince(c.req.query("since"));
+	if (since === undefined) return c.json({ error: "bad since (unix seconds, ms, or ISO time)" }, 400);
+	const scope = c.get("scope" as never) as any;
+	return c.json(await (unifiedStub(c.env) as any).agentInbox(scope.sources, since, clampLimit(c.req.query("limit"), 50)));
+});
+agentApi.get("/api/everest/search", async (c) => {
+	const q = c.req.query("q") || null;
+	const from = c.req.query("from") || null;
+	if (!q && !from) return c.json({ error: "need q and/or from" }, 400);
+	const since = parseSince(c.req.query("since"));
+	if (since === undefined) return c.json({ error: "bad since" }, 400);
+	const scope = c.get("scope" as never) as any;
+	return c.json(await (unifiedStub(c.env) as any).agentSearch(scope.sources, q, from, since, clampLimit(c.req.query("limit"), 20)));
+});
+agentApi.get("/api/everest/mail", async (c) => {
+	const id = c.req.query("id");
+	if (!id) return c.json({ error: "need id" }, 400);
+	const scope = c.get("scope" as never) as any;
+	const mail = await (unifiedStub(c.env) as any).agentMail(scope.sources, id);
+	return mail ? c.json(mail) : c.json({ error: "not found" }, 404);
+});
+agentApi.all("*", (c) => c.json({ error: "not found" }, 404));
+
+function unifiedStub(env: Env) {
+	return env.MAILBOX.get(env.MAILBOX.idFromName(unifiedMailboxId(env)));
+}
+
+app.use("*", async (c, next) => {
+	const host = new URL(c.req.url).hostname;
+	const agentHost = (c.env as any).AGENT_API_HOST as string | undefined;
+	if ((agentHost && host === agentHost) || c.req.path.startsWith("/api/everest/")) {
+		return agentApi.fetch(c.req.raw, c.env, c.executionCtx);
+	}
+	await next();
+});
 
 // Cloudflare Access JWT validation middleware (production only)
 app.use("*", async (c, next) => {

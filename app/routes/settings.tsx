@@ -81,6 +81,7 @@ export default function SettingsRoute() {
 				</div>
 
 				<SourceAccounts />
+				<AgentTokens />
 
 				{/* Save */}
 				<div className="flex justify-end">
@@ -281,6 +282,95 @@ function SourceAccounts() {
 			<p className="text-xs text-kumo-subtle mt-3">
 				Hotmail、linux.do、NodeSeek 等请设置转发到任意 @yuzh.de 地址。
 			</p>
+		</div>
+	);
+}
+
+type AgentToken = { id: string; name: string; sources: string[]; created_at: string; last_used_at: string | null };
+
+function AgentTokens() {
+	const [tokens, setTokens] = useState<AgentToken[] | null>(null);
+	const [name, setName] = useState("");
+	const [sources, setSources] = useState("");
+	const [creating, setCreating] = useState(false);
+	const [fresh, setFresh] = useState<string | null>(null);
+
+	const load = async () => {
+		const r = await fetch("/api/v1/agent-tokens");
+		setTokens(r.ok ? await r.json() : []);
+	};
+	useEffect(() => { load(); }, []);
+
+	const create = async () => {
+		setCreating(true);
+		try {
+			const r = await fetch("/api/v1/agent-tokens", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ name, sources }),
+			});
+			const j = await r.json();
+			setFresh(j.token);
+			setName("");
+			setSources("");
+			await load();
+		} finally {
+			setCreating(false);
+		}
+	};
+
+	const revoke = async (id: string) => {
+		if (!confirm("吊销后使用这个 token 的 agent 会立刻失去访问权限，确定吗？")) return;
+		await fetch(`/api/v1/agent-tokens/${id}`, { method: "DELETE" });
+		await load();
+	};
+
+	return (
+		<div className="rounded-lg border border-kumo-line bg-kumo-base p-5">
+			<span className="text-sm font-medium text-kumo-default">Agent 只读访问</span>
+			<p className="text-xs text-kumo-subtle mt-1 mb-4">每个 token 只能读信，不能改动或发信。可以限定只看某几个邮箱。</p>
+			{fresh && (
+				<div className="mb-4 rounded-md border border-kumo-brand bg-kumo-tint p-3">
+					<p className="text-xs text-kumo-default mb-2">新 token 只显示这一次，请现在复制给你的 agent：</p>
+					<div className="flex items-center gap-2">
+						<code className="flex-1 break-all text-xs">{fresh}</code>
+						<Button size="xs" variant="secondary" onClick={() => navigator.clipboard.writeText(fresh)}>复制</Button>
+						<Button size="xs" variant="ghost" onClick={() => setFresh(null)}>完成</Button>
+					</div>
+				</div>
+			)}
+			{tokens === null ? (
+				<Loader />
+			) : (
+				<div className="space-y-2 mb-4">
+					{tokens.length === 0 && <p className="text-xs text-kumo-subtle">还没有 token。</p>}
+					{tokens.map((t) => (
+						<div key={t.id} className="flex items-center justify-between rounded-md border border-kumo-line px-3 py-2">
+							<div className="min-w-0">
+								<div className="text-sm text-kumo-default">{t.name}</div>
+								<div className="text-xs text-kumo-subtle truncate">
+									{t.sources.length ? `只看：${t.sources.join("、")}` : "全部邮箱"}
+									{" · "}
+									{t.last_used_at ? `上次使用 ${t.last_used_at} UTC` : "未使用"}
+								</div>
+							</div>
+							<Button variant="ghost" shape="square" size="sm" icon={<TrashIcon size={14} />} onClick={() => revoke(t.id)} aria-label="吊销" />
+						</div>
+					))}
+				</div>
+			)}
+			<div className="space-y-2">
+				<Input label="名称" value={name} onChange={(e) => setName(e.target.value)} placeholder="everest" />
+				<Input
+					label="限定邮箱（可选）"
+					value={sources}
+					onChange={(e) => setSources(e.target.value)}
+					placeholder="多个用逗号分隔，留空表示全部"
+				/>
+				<div className="flex justify-end">
+					<Button variant="primary" size="sm" onClick={create} loading={creating}>生成 token</Button>
+				</div>
+			</div>
 		</div>
 	);
 }

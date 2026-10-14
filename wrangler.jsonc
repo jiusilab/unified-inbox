@@ -4,6 +4,8 @@
 	"compatibility_date": "2025-11-28",
 	"main": "./workers/app.ts",
 	"workers_dev": true,
+	// Read-only agent API host (bearer tokens, not behind Access). Serves /api/everest/* only.
+	"routes": [{ "pattern": "inbox-api.yuzh.de", "custom_domain": true }],
 	"preview_urls": false,
 	"triggers": {
 		"crons": ["*/5 * * * *"]
@@ -26,7 +28,8 @@
 		"UNIFIED_MAILBOX": "inbox@yuzh.de",
 		// IMAP sources. Credentials are Worker secrets: IMAP_GMAIL_USER, IMAP_GMAIL_PASS (app password).
 		"IMAP_ACCOUNTS": "gmail",
-		"IMAP_INITIAL_DAYS": "90"
+		"IMAP_INITIAL_DAYS": "90",
+		"AGENT_API_HOST": "inbox-api.yuzh.de"
 	},
 	"r2_buckets": [
 		{

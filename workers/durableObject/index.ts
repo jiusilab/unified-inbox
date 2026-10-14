@@ -15,6 +15,23 @@ import { connect } from "cloudflare:sockets";
 import { syncPop3, testPop3Login, type Pop3Account, type Pop3Store } from "../pop3/sync";
 import { syncAccount, testLogin, type IngestMeta, type OpKind, type SyncStore, type SyncSummary, type ImapAccount } from "../imap/sync";
 
+async function sha256Hex(s: string): Promise<string> {
+	const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+	return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function htmlToText(html: string): string {
+	if (!/<[a-z!/][^>]*>/i.test(html)) return html.trim();
+	return html
+		.replace(/<(script|style|head)[^>]*>[\s\S]*?<\/\1>/gi, "")
+		.replace(/<br\s*\/?>/gi, "\n")
+		.replace(/<\/(p|div|tr|li|h[1-6])>/gi, "\n")
+		.replace(/<[^>]+>/g, "")
+		.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+		.replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+		.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 /**
  * SQL expression to normalize email subjects by stripping common
  * reply/forward prefixes (Re:, Fwd:, FW:, AW:, WG:, Réf:, SV:).
@@ -449,8 +466,6 @@ export class MailboxDO extends DurableObject<Env> {
 
 		if (!email) return null;
 
-		this.#queueSourceOp(id, "trash");
-
 		const emailAttachments = this.db
 			.select()
 			.from(schema.attachments)
@@ -548,6 +563,9 @@ export class MailboxDO extends DurableObject<Env> {
 			.get();
 
 		if (!email) return null;
+
+		// permanent delete here → make sure it is in the source mailbox's trash too
+		this.#queueSourceOp(id, "trash");
 
 		const emailAttachments = this.db
 			.select({
@@ -967,6 +985,109 @@ export class MailboxDO extends DurableObject<Env> {
 			);
 		}
 		return "new";
+	}
+
+	// ── Agent API (read-only, scoped tokens) ─────────────────────────
+
+	async agentTokenCreate(name: string, sources: string[]) {
+		const raw = new Uint8Array(32);
+		crypto.getRandomValues(raw);
+		const token = "ev_" + [...raw].map((b) => b.toString(16).padStart(2, "0")).join("");
+		const id = crypto.randomUUID();
+		this.ctx.storage.sql.exec(
+			`INSERT INTO agent_tokens (id, name, token_hash, sources) VALUES (?, ?, ?, ?)`,
+			id, name, await sha256Hex(token), sources.length ? JSON.stringify(sources) : null,
+		);
+		return { id, token };
+	}
+
+	async agentTokenList() {
+		return ([...this.ctx.storage.sql.exec(
+			`SELECT id, name, sources, created_at, last_used_at FROM agent_tokens ORDER BY created_at`,
+		)] as any[]).map((r) => ({ ...r, sources: r.sources ? JSON.parse(r.sources) : [] }));
+	}
+
+	async agentTokenDelete(id: string) {
+		this.ctx.storage.sql.exec(`DELETE FROM agent_tokens WHERE id = ?`, id);
+		return { ok: true };
+	}
+
+	async agentAuth(token: string): Promise<{ id: string; sources: string[] } | null> {
+		const row = [...this.ctx.storage.sql.exec(
+			`SELECT id, sources FROM agent_tokens WHERE token_hash = ?`, await sha256Hex(token),
+		)][0] as any;
+		if (!row) return null;
+		this.ctx.storage.sql.exec(`UPDATE agent_tokens SET last_used_at = datetime('now') WHERE id = ?`, row.id);
+		return { id: String(row.id), sources: row.sources ? JSON.parse(row.sources) : [] };
+	}
+
+	#agentScope(sources: string[], params: (string | number)[]): string {
+		if (!sources.length) return "1=1";
+		const parts = sources.map((addr) => {
+			params.push(`%${addr.toLowerCase()}`, `%${addr.toLowerCase()}%`);
+			return `(LOWER(COALESCE(e.source,'')) LIKE ? OR LOWER(COALESCE(e.recipient,'')) LIKE ?)`;
+		});
+		return `(${parts.join(" OR ")})`;
+	}
+
+	#agentRows(where: string, params: (string | number)[], order: string, limit: number) {
+		const rows = [...this.ctx.storage.sql.exec(
+			`SELECT e.id, e.received_at, e.date, e.sender, e.recipient, e.cc, e.subject, e.source, e.folder_id,
+			        SUBSTR(e.body, 1, 2000) as body_head
+			 FROM emails e WHERE ${where} ORDER BY ${order} LIMIT ?`,
+			...params, limit,
+		)] as any[];
+		return rows.map((r) => ({
+			id: r.id,
+			received_at: r.received_at,
+			date: r.date,
+			from: r.sender,
+			to: r.recipient,
+			cc: r.cc || undefined,
+			subject: r.subject,
+			snippet: htmlToText(r.body_head || "").slice(0, 280),
+			source: r.source || "routing",
+			folder: r.folder_id,
+		}));
+	}
+
+	async agentInbox(sources: string[], since: string | null, limit: number) {
+		const params: (string | number)[] = [];
+		let where = this.#agentScope(sources, params);
+		if (since) { where += ` AND e.received_at > ?`; params.push(since); }
+		const emails = this.#agentRows(where, params, "e.received_at ASC", limit);
+		const next = emails.length ? emails[emails.length - 1].received_at : since;
+		return { emails, next_since: next, has_more: emails.length === limit };
+	}
+
+	async agentSearch(sources: string[], q: string | null, from: string | null, since: string | null, limit: number) {
+		const params: (string | number)[] = [];
+		let where = this.#agentScope(sources, params);
+		if (q) { where += ` AND (e.subject LIKE ? OR e.body LIKE ?)`; params.push(`%${q}%`, `%${q}%`); }
+		if (from) { where += ` AND e.sender LIKE ?`; params.push(`%${from}%`); }
+		if (since) { where += ` AND e.received_at > ?`; params.push(since); }
+		return { emails: this.#agentRows(where, params, "e.received_at DESC", limit) };
+	}
+
+	async agentMail(sources: string[], id: string) {
+		const params: (string | number)[] = [];
+		const where = this.#agentScope(sources, params) + ` AND e.id = ?`;
+		params.push(id);
+		const row = [...this.ctx.storage.sql.exec(
+			`SELECT e.id, e.received_at, e.date, e.sender, e.recipient, e.cc, e.subject, e.source, e.folder_id, e.body,
+			        e.message_id, e.thread_id
+			 FROM emails e WHERE ${where}`, ...params,
+		)][0] as any;
+		if (!row) return null;
+		const attachments = ([...this.ctx.storage.sql.exec(
+			`SELECT filename, mimetype, size FROM attachments WHERE email_id = ?`, id,
+		)] as any[]).map((a) => ({ filename: a.filename, mimetype: a.mimetype, size: a.size }));
+		return {
+			id: row.id, received_at: row.received_at, date: row.date, from: row.sender, to: row.recipient,
+			cc: row.cc || undefined, subject: row.subject, source: row.source || "routing", folder: row.folder_id,
+			message_id: row.message_id, thread_id: row.thread_id,
+			text: htmlToText(row.body || ""), attachments,
+		};
 	}
 
 	/** Queue a Gmail-side action for an email that came from an IMAP source. */

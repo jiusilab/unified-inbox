@@ -239,4 +239,35 @@ export const mailboxMigrations: Migration[] = [
             );
         `,
 	},
+	{
+		name: "13_agent_api_and_trash_fix",
+		sql: `
+            ALTER TABLE emails ADD COLUMN received_at TEXT;
+            UPDATE emails SET received_at = COALESCE(date, strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+            CREATE INDEX IF NOT EXISTS idx_emails_received_at ON emails(received_at);
+            CREATE TRIGGER IF NOT EXISTS emails_received_at AFTER INSERT ON emails
+            WHEN NEW.received_at IS NULL
+            BEGIN
+                UPDATE emails SET received_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE rowid = NEW.rowid;
+            END;
+            CREATE TABLE IF NOT EXISTS agent_tokens (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                token_hash TEXT NOT NULL UNIQUE,
+                sources TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                last_used_at TEXT
+            );
+            -- Undo Gmail-side trashing caused by opening an email (bug before v13):
+            -- anything still in the local inbox/archive is put back where it belongs in Gmail.
+            INSERT INTO imap_ops (account, op, gm_msgid)
+                SELECT source, CASE WHEN folder_id = 'archive' THEN 'archive' ELSE 'inbox' END, source_msgid
+                FROM emails
+                WHERE source_folder = 'TRASH' AND source IS NOT NULL AND source_msgid IS NOT NULL
+                  AND folder_id NOT IN ('trash', 'spam');
+            UPDATE emails SET source_folder = CASE WHEN folder_id = 'archive' THEN 'ARCHIVE' ELSE 'RESTORING' END
+                WHERE source_folder = 'TRASH' AND source IS NOT NULL AND source_msgid IS NOT NULL
+                  AND folder_id NOT IN ('trash', 'spam');
+        `,
+	},
 ];

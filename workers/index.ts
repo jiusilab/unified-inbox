@@ -399,6 +399,20 @@ app.get("/api/v1/sync", async (c) => {
 
 // -- Connected source accounts ("Sign in with Google") ---------------
 
+// Agent API tokens (managed from Settings, behind Access)
+app.get("/api/v1/agent-tokens", async (c) =>
+	c.json(await (c.env.MAILBOX.get(c.env.MAILBOX.idFromName(unifiedMailboxId(c.env))) as any).agentTokenList()));
+app.post("/api/v1/agent-tokens", async (c) => {
+	const body = (await c.req.json().catch(() => ({}))) as { name?: string; sources?: string[] | string };
+	const name = String(body.name || "").trim() || "agent";
+	const list = Array.isArray(body.sources) ? body.sources : String(body.sources || "").split(/[,，\s]+/);
+	const sources = list.map((x) => String(x).trim().toLowerCase()).filter(Boolean);
+	const stub = c.env.MAILBOX.get(c.env.MAILBOX.idFromName(unifiedMailboxId(c.env))) as any;
+	return c.json(await stub.agentTokenCreate(name, sources));
+});
+app.delete("/api/v1/agent-tokens/:id", async (c) =>
+	c.json(await (c.env.MAILBOX.get(c.env.MAILBOX.idFromName(unifiedMailboxId(c.env))) as any).agentTokenDelete(c.req.param("id"))));
+
 app.get("/api/v1/accounts", async (c) => {
 	const stub = await ensureUnifiedMailbox(c.env);
 	return c.json({
