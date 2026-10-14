@@ -386,25 +386,37 @@ function OtpTelegram() {
 	const saveTok = async () => {
 		setBusy(true); setErr(null);
 		try {
-			const j = await (await fetch("/api/v1/otp/token", {
+			const r = await fetch("/api/v1/otp/token", {
 				method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: tok }),
-			})).json();
-			if (!j.ok) setErr(j.error); else setTok("");
+			});
+			const txt = await r.text();
+			let j: any = null;
+			try { j = JSON.parse(txt); } catch { /* not json */ }
+			if (!j) setErr(`保存失败（HTTP ${r.status}）：${txt.slice(0, 120)}`);
+			else if (!j.ok) setErr(j.error);
+			else { setTok(""); setErr(null); }
 			await load();
+		} catch (e) {
+			setErr(`保存失败：${(e as Error).message}`);
 		} finally { setBusy(false); }
 	};
 	const load = async () => {
 		const r = await fetch("/api/v1/otp");
 		if (r.ok) setSt(await r.json());
+		else setErr(`读取状态失败（HTTP ${r.status}）`);
 	};
 	useEffect(() => { load(); }, []);
 
 	const bind = async () => {
 		setBusy(true); setErr(null);
 		try {
-			const j = await (await fetch("/api/v1/otp/bind", { method: "POST" })).json();
-			if (!j.ok) setErr(j.error);
+			const r = await fetch("/api/v1/otp/bind", { method: "POST" });
+			const j = await r.json().catch(() => null);
+			if (!j) setErr(`绑定失败（HTTP ${r.status}）`);
+			else if (!j.ok) setErr(j.error);
 			await load();
+		} catch (e) {
+			setErr(`绑定失败：${(e as Error).message}`);
 		} finally { setBusy(false); }
 	};
 	const toggle = async () => {
