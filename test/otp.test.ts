@@ -1,0 +1,13 @@
+import assert from "node:assert/strict";
+import { detectOtp } from "../workers/otp";
+const t = (s: string, b: string) => detectOtp(s, b)?.code ?? null;
+assert.equal(t("【淘宝】验证码", "您的验证码是 384912，5分钟内有效。2026年"), "384912");
+assert.equal(t("Your GitHub launch code", "<p>Your verification code is:</p><p><b>739204</b></p>"), "739204");
+assert.equal(t("Sign in to Notion", "Here is your login code: <strong>KP7Q2M</strong>"), "KP7Q2M");
+assert.equal(t("Steam Guard", "Your one-time code: F4K9P"), "F4K9P");
+assert.equal(t("Microsoft account security code", "Security code: 0427 ... ID 2026"), "0427");
+assert.equal(t("Reset your password", "verification code 123456 reset your password"), null);
+assert.equal(t("Azure invoice", "Your invoice verification code 123456"), null);
+assert.equal(t("Weekly newsletter", "Our 2026 roadmap, order #99812"), null);
+assert.equal(t("验证你的邮箱", "点击链接验证 https://x.com/v?t=123456"), null);
+console.log("ALL TESTS PASSED");

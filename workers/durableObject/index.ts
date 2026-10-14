@@ -12,6 +12,7 @@ import type { Env } from "../types";
 import { applyMigrations, mailboxMigrations } from "./migrations";
 import PostalMime from "postal-mime";
 import { connect } from "cloudflare:sockets";
+import { detectOtp, sendTelegram, escapeHtml } from "../otp";
 import { syncPop3, testPop3Login, type Pop3Account, type Pop3Store } from "../pop3/sync";
 import { syncAccount, testLogin, type IngestMeta, type OpKind, type SyncStore, type SyncSummary, type ImapAccount } from "../imap/sync";
 
@@ -984,7 +985,73 @@ export class MailboxDO extends DurableObject<Env> {
 				meta.source, meta.sourceUid, meta.sourceFolder ?? "INBOX", meta.gmMsgId ?? null, messageId,
 			);
 		}
+		try {
+			await this.#maybeOtp(messageId, parsed.subject || "", parsed.text || parsed.html || "",
+				(parsed.from?.name || parsed.from?.address || "").trim(), date, !!meta.seen);
+		} catch (e) {
+			console.error("otp push failed", (e as Error).message);
+		}
 		return "new";
+	}
+
+	// ── Verification codes → Telegram ─────────────────────────────
+
+	async otpSettings() {
+		const s = ((await this.ctx.storage.get("otp")) as { enabled?: boolean; chatId?: string; chatName?: string; lastPush?: string }) || {};
+		return { enabled: !!s.enabled, chatId: s.chatId || null, chatName: s.chatName || null, lastPush: s.lastPush || null,
+			hasToken: !!(this.env as any).TELEGRAM_BOT_TOKEN };
+	}
+
+	async otpSetEnabled(enabled: boolean) {
+		const s = ((await this.ctx.storage.get("otp")) as any) || {};
+		if (enabled && !s.chatId) return { ok: false, error: "先绑定 Telegram" };
+		await this.ctx.storage.put("otp", { ...s, enabled });
+		return { ok: true };
+	}
+
+	async otpBind() {
+		const token = (this.env as any).TELEGRAM_BOT_TOKEN as string | undefined;
+		if (!token) return { ok: false, error: "还没有设置 TELEGRAM_BOT_TOKEN" };
+		const r = await fetch(`https://api.telegram.org/bot${token}/getUpdates`);
+		const j = (await r.json()) as any;
+		if (!j.ok) return { ok: false, error: `Telegram: ${j.description || r.status}` };
+		const msgs = (j.result || []).map((u: any) => u.message || u.channel_post).filter(Boolean);
+		const last = msgs[msgs.length - 1];
+		if (!last) return { ok: false, error: "没找到消息。先在 Telegram 里给你的机器人发一句话，再点绑定" };
+		const chat = last.chat;
+		const s = ((await this.ctx.storage.get("otp")) as any) || {};
+		const chatName = chat.username ? `@${chat.username}` : [chat.first_name, chat.last_name, chat.title].filter(Boolean).join(" ");
+		await this.ctx.storage.put("otp", { ...s, chatId: String(chat.id), chatName });
+		await sendTelegram(token, String(chat.id), "✅ 已绑定统一收件箱，验证码会推到这里。");
+		return { ok: true, chatName };
+	}
+
+	async #maybeOtp(emailId: string, subject: string, body: string, from: string, date: string, seen: boolean) {
+		if (seen) return;
+		// only fresh mail: never replay old codes during an initial import
+		if (Date.now() - Date.parse(date) > 15 * 60_000) return;
+		const s = ((await this.ctx.storage.get("otp")) as any) || {};
+		const token = (this.env as any).TELEGRAM_BOT_TOKEN as string | undefined;
+		if (!s.enabled || !s.chatId || !token) return;
+		const hit = detectOtp(subject, body);
+		if (!hit) return;
+		const text = `<code>${escapeHtml(hit.code)}</code>\n${escapeHtml(from)} · ${escapeHtml(subject).slice(0, 80)}`;
+		if (!(await sendTelegram(token, s.chatId, text))) return; // keep it in the inbox if Telegram failed
+		this.ctx.storage.sql.exec(`UPDATE emails SET folder_id = 'otp', read = 1 WHERE id = ?`, emailId);
+		await this.ctx.storage.put("otp", { ...s, lastPush: new Date().toISOString() });
+	}
+
+	/** Remove verification-code mail older than 24h. */
+	async #purgeOtp() {
+		const ids = ([...this.ctx.storage.sql.exec(
+			`SELECT id FROM emails WHERE folder_id = 'otp' AND received_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day') LIMIT 50`,
+		)] as any[]).map((r) => String(r.id));
+		for (const id of ids) {
+			const atts = await this.deleteEmail(id);
+			if (atts?.length) {
+				await this.env.BUCKET.delete(atts.map((a: any) => `attachments/${id}/${a.id}/${a.filename}`)).catch(() => {});
+			}
+		}
 	}
 
 	// ── Agent API (read-only, scoped tokens) ─────────────────────────
@@ -1114,6 +1181,7 @@ export class MailboxDO extends DurableObject<Env> {
 
 	/** Run one bounded sync pass for every configured IMAP account. */
 	async syncImap(): Promise<SyncSummary[]> {
+		await this.#purgeOtp().catch((e) => console.error("otp purge", (e as Error).message));
 		if (this.#syncing) return this.#syncing;
 		this.#syncing = this.#runSync().finally(() => { this.#syncing = null; });
 		return this.#syncing;

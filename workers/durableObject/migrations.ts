@@ -270,4 +270,8 @@ export const mailboxMigrations: Migration[] = [
                   AND folder_id NOT IN ('trash', 'spam');
         `,
 	},
+	{
+		name: "14_otp_folder",
+		sql: `INSERT OR IGNORE INTO folders (id, name, is_deletable) VALUES ('otp', '验证码', 0);`,
+	},
 ];

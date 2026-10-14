@@ -81,6 +81,7 @@ export default function SettingsRoute() {
 				</div>
 
 				<SourceAccounts />
+				<OtpTelegram />
 				<AgentTokens />
 
 				{/* Save */}
@@ -371,6 +372,74 @@ function AgentTokens() {
 					<Button variant="primary" size="sm" onClick={create} loading={creating}>生成 token</Button>
 				</div>
 			</div>
+		</div>
+	);
+}
+
+type OtpState = { enabled: boolean; chatId: string | null; chatName: string | null; lastPush: string | null; hasToken: boolean };
+
+function OtpTelegram() {
+	const [st, setSt] = useState<OtpState | null>(null);
+	const [busy, setBusy] = useState(false);
+	const [err, setErr] = useState<string | null>(null);
+	const load = async () => {
+		const r = await fetch("/api/v1/otp");
+		if (r.ok) setSt(await r.json());
+	};
+	useEffect(() => { load(); }, []);
+
+	const bind = async () => {
+		setBusy(true); setErr(null);
+		try {
+			const j = await (await fetch("/api/v1/otp/bind", { method: "POST" })).json();
+			if (!j.ok) setErr(j.error);
+			await load();
+		} finally { setBusy(false); }
+	};
+	const toggle = async () => {
+		if (!st) return;
+		setBusy(true); setErr(null);
+		try {
+			const j = await (await fetch("/api/v1/otp/enabled", {
+				method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !st.enabled }),
+			})).json();
+			if (!j.ok) setErr(j.error);
+			await load();
+		} finally { setBusy(false); }
+	};
+
+	return (
+		<div className="rounded-lg border border-kumo-line bg-kumo-base p-5">
+			<div className="flex items-center justify-between">
+				<span className="text-sm font-medium text-kumo-default">验证码推送到 Telegram</span>
+				{st && (
+					<button
+						type="button"
+						role="switch"
+						aria-checked={st.enabled}
+						disabled={busy || !st.chatId}
+						onClick={toggle}
+						className={`relative h-5 w-9 rounded-full transition-colors disabled:opacity-40 ${st.enabled ? "bg-kumo-brand" : "bg-kumo-line"}`}
+					>
+						<span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${st.enabled ? "left-[18px]" : "left-0.5"}`} />
+					</button>
+				)}
+			</div>
+			<p className="text-xs text-kumo-subtle mt-1 mb-3">
+				新到的验证码邮件只把验证码和发件人推到 Telegram，原信移到「验证码」文件夹，24 小时后自动删除。账单、扣款、密码重置类邮件不会被处理。Telegram 发送失败时邮件留在收件箱。
+			</p>
+			{st === null ? <Loader /> : !st.hasToken ? (
+				<p className="text-xs text-kumo-subtle">还没有设置 Worker secret TELEGRAM_BOT_TOKEN。</p>
+			) : (
+				<div className="flex items-center justify-between gap-2">
+					<span className="text-xs text-kumo-subtle">
+						{st.chatId ? `已绑定 ${st.chatName || st.chatId}` : "未绑定：先给机器人发一句话，再点绑定"}
+						{st.lastPush ? ` · 上次推送 ${new Date(st.lastPush).toLocaleString()}` : ""}
+					</span>
+					<Button size="xs" variant="secondary" onClick={bind} loading={busy}>{st.chatId ? "重新绑定" : "绑定"}</Button>
+				</div>
+			)}
+			{err && <p className="text-xs text-kumo-danger mt-2">{err}</p>}
 		</div>
 	);
 }

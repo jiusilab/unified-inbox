@@ -399,6 +399,15 @@ app.get("/api/v1/sync", async (c) => {
 
 // -- Connected source accounts ("Sign in with Google") ---------------
 
+// Verification codes → Telegram
+const uStub = (c: Context) => c.env.MAILBOX.get(c.env.MAILBOX.idFromName(unifiedMailboxId(c.env))) as any;
+app.get("/api/v1/otp", async (c) => c.json(await uStub(c).otpSettings()));
+app.post("/api/v1/otp/bind", async (c) => c.json(await uStub(c).otpBind()));
+app.post("/api/v1/otp/enabled", async (c) => {
+	const { enabled } = (await c.req.json().catch(() => ({}))) as { enabled?: boolean };
+	return c.json(await uStub(c).otpSetEnabled(!!enabled));
+});
+
 // Agent API tokens (managed from Settings, behind Access)
 app.get("/api/v1/agent-tokens", async (c) =>
 	c.json(await (c.env.MAILBOX.get(c.env.MAILBOX.idFromName(unifiedMailboxId(c.env))) as any).agentTokenList()));
