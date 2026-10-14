@@ -3,6 +3,8 @@
 	"name": "unified-inbox",
 	"compatibility_date": "2025-11-28",
 	"main": "./workers/app.ts",
+	"workers_dev": true,
+	"preview_urls": false,
 	"triggers": {
 		"crons": ["*/5 * * * *"]
 	},
