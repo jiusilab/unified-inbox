@@ -4,6 +4,8 @@
 	"compatibility_date": "2025-11-28",
 	"main": "./workers/app.ts",
 	"workers_dev": true,
+	// Keep variables added in the Cloudflare dashboard across deploys.
+	"keep_vars": true,
 	// Read-only agent API host (bearer tokens, not behind Access). Serves /api/everest/* only.
 	"routes": [{ "pattern": "inbox-api.yuzh.de", "custom_domain": true }],
 	"preview_urls": false,
