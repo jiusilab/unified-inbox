@@ -1252,10 +1252,9 @@ export class MailboxDO extends DurableObject<Env> {
 				sqlx.exec(`UPDATE emails SET source_folder = 'STALE' WHERE source = ? AND source_folder = 'INBOX'`, account);
 			},
 			sourceLeftInbox: (emailId, where) => {
-				// Verification-code mail stays in 验证码 (it purges itself after 24h).
 				const folder = where === "archive" ? Folders.ARCHIVE : Folders.TRASH;
 				sqlx.exec(
-					`UPDATE emails SET source_folder = ?, folder_id = CASE WHEN folder_id = 'otp' THEN folder_id WHEN folder_id = 'inbox' OR ? = 'trash' THEN ? ELSE folder_id END WHERE id = ?`,
+					`UPDATE emails SET source_folder = ?, folder_id = CASE WHEN folder_id = 'inbox' OR ? = 'trash' THEN ? ELSE folder_id END WHERE id = ?`,
 					where === "archive" ? "ARCHIVE" : "TRASH", folder, folder, emailId,
 				);
 			},
