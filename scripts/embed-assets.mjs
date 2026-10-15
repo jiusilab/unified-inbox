@@ -10,7 +10,7 @@ const clientDir = path.join(root, "build/client");
 const serverDir = path.join(root, "build/server");
 const TYPES = {
 	".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml",
-	".ico": "image/x-icon", ".png": "image/png", ".json": "application/json", ".woff2": "font/woff2",
+	".ico": "image/x-icon", ".png": "image/png", ".json": "application/json", ".webmanifest": "application/manifest+json", ".woff2": "font/woff2",
 	".woff": "font/woff", ".txt": "text/plain; charset=utf-8", ".html": "text/html; charset=utf-8",
 };
 

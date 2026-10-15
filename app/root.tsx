@@ -88,7 +88,14 @@ export function Layout({ children }: { children: React.ReactNode }) {
 					sizes="48x48 32x32 16x16"
 				/>
 				<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-				<title>Agentic Inbox</title>
+				<link rel="manifest" href="/manifest.webmanifest" crossOrigin="use-credentials" />
+				<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+				<meta name="apple-mobile-web-app-capable" content="yes" />
+				<meta name="mobile-web-app-capable" content="yes" />
+				<meta name="apple-mobile-web-app-title" content="Inbox" />
+				<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+				<meta name="theme-color" content="#ffffff" />
+				<title>Unified Inbox</title>
 				<Meta />
 				<Links />
 			</head>
@@ -103,7 +110,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
 export function HydrateFallback() {
 	return (
-		<div className="flex items-center justify-center h-screen">
+		<div className="flex items-center justify-center h-dvh">
 			<Loader size="lg" />
 		</div>
 	);

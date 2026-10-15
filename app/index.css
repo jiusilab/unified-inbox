@@ -25,3 +25,8 @@ body {
   margin-top: 0.25em;
   margin-bottom: 0.25em;
 }
+
+/* Mobile: avoid iOS auto-zoom on input focus */
+@media (max-width: 767px) {
+	input, textarea, select { font-size: 16px !important; }
+}
