@@ -1270,6 +1270,9 @@ export class MailboxDO extends DurableObject<Env> {
 				initialDays: Number((this.env as any).IMAP_INITIAL_DAYS || 90),
 				maxMessages: 15,
 				budgetMs: 25_000,
+				// Sync runs every minute for fast OTP delivery; the full-inbox
+				// comparison is the costly part, so only do it on 5-minute marks.
+				reconcile: new Date().getUTCMinutes() % 5 === 0,
 				log: (m) => console.log(`[imap ${acct.name}] ${m}`),
 			});
 			sqlx.exec(

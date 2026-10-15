@@ -310,7 +310,7 @@ function AgentTokens() {
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ name, sources }),
 			});
-			const j = await r.json();
+			const j: any = await r.json();
 			setFresh(j.token);
 			setName("");
 			setSources("");
@@ -411,7 +411,7 @@ function OtpTelegram() {
 		setBusy(true); setErr(null);
 		try {
 			const r = await fetch("/api/v1/otp/bind", { method: "POST" });
-			const j = await r.json().catch(() => null);
+			const j: any = await r.json().catch(() => null);
 			if (!j) setErr(`绑定失败（HTTP ${r.status}）`);
 			else if (!j.ok) setErr(j.error);
 			await load();
@@ -423,11 +423,15 @@ function OtpTelegram() {
 		if (!st) return;
 		setBusy(true); setErr(null);
 		try {
-			const j = await (await fetch("/api/v1/otp/enabled", {
+			const r = await fetch("/api/v1/otp/enabled", {
 				method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !st.enabled }),
-			})).json();
-			if (!j.ok) setErr(j.error);
+			});
+			const j: any = await r.json().catch(() => null);
+			if (!j) setErr(`切换失败（HTTP ${r.status}），可能登录已过期，刷新页面再试`);
+			else if (!j.ok) setErr(j.error);
 			await load();
+		} catch (e) {
+			setErr(`切换失败：${(e as Error).message}`);
 		} finally { setBusy(false); }
 	};
 

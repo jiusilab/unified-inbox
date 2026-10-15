@@ -57,6 +57,8 @@ export interface SyncOptions {
 	maxMessages?: number;
 	maxBodyBytes?: number;
 	budgetMs?: number;
+	/** Compare the Gmail INBOX with tracked mail to catch remote archive/delete (default true). */
+	reconcile?: boolean;
 	initialDays?: number;
 	log?: (msg: string) => void;
 }
@@ -242,7 +244,7 @@ export async function syncAccount(acct: ImapAccount, store: SyncStore, opts: Syn
 		}
 
 		// ── 3. detect messages that left the Gmail INBOX ─────────
-		if (isGmail && !outOfTime()) {
+		if (isGmail && !outOfTime() && opts.reconcile !== false) {
 			await selectBox(boxes.inbox);
 			const present = new Set(await c.uidSearch("ALL"));
 			const gone = store

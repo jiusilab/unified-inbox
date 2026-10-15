@@ -10,7 +10,7 @@
 	"routes": [{ "pattern": "inbox-api.yuzh.de", "custom_domain": true }],
 	"preview_urls": false,
 	"triggers": {
-		"crons": ["*/5 * * * *"]
+		"crons": ["* * * * *"]
 	},
 	"observability": {
 		"enabled": true
