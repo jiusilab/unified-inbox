@@ -1,98 +1,117 @@
 <div align="center">
-  <h1>Agentic Inbox</h1>
-  <p><em>A self-hosted email client with an AI agent, running entirely on Cloudflare Workers</em></p>
+  <h1>Unified Inbox</h1>
+  <p><em>把散落在各处的邮箱收进一个自托管的网页收件箱，跑在 Cloudflare Workers 免费版上</em></p>
 </div>
 
-Agentic Inbox lets you send, receive, and manage emails through a modern web interface -- all powered by your own Cloudflare account. Incoming emails arrive via [Cloudflare Email Routing](https://developers.cloudflare.com/email-routing/), each mailbox is isolated in its own [Durable Object](https://developers.cloudflare.com/durable-objects/) with a SQLite database, and attachments are stored in [R2](https://developers.cloudflare.com/r2/).
+Unified Inbox 是 [cloudflare/agentic-inbox](https://github.com/cloudflare/agentic-inbox) 的个人分支。目标是把 Gmail、Outlook/Hotmail、163、论坛通知、自有域名邮件等十几个邮箱汇总到同一个列表里，统一阅读、整理和删除，删除/归档会尽量同步回源邮箱。
 
-An **AI-powered Email Agent** can read your inbox, search conversations, and draft replies -- built with the [Cloudflare Agents SDK](https://developers.cloudflare.com/agents/) and [Workers AI](https://developers.cloudflare.com/workers-ai/).
+它是**只收不发**的：发信、回复、转发接口在服务端被直接拒绝（403）。
 
-![Agentic Inbox screenshot](./demo_app.png)
+## 功能
 
+- **统一收件箱**：所有来源合并为一个邮箱（`UNIFIED_MAILBOX`），一个列表按时间排列，每页 25 封。
+- **多种来源**
+  - **Gmail（OAuth）**：应用内「用 Google 登录」接入，refresh token 存在 Durable Object 里。删除/归档会镜像回 Gmail；Gmail 里删除或移出 INBOX 的邮件，也会同步到这里的垃圾箱/归档。
+  - **IMAP（授权码）**：如 163、QQ 等，在应用内表单添加。只拉取，不回写。
+  - **POP3**：只拉取。
+  - **转发**：任何 `@你的域名` 地址都能收（Email Routing catch-all → Worker），适合 Outlook/Hotmail、论坛通知等。
+- **同步频率**：Cron 每分钟拉取 IMAP/POP/Gmail 新邮件；Gmail 远端归档/删除的对账每 5 分钟一次。首次同步回溯 `IMAP_INITIAL_DAYS` 天。
+- **验证码转 Telegram**：识别验证码邮件，推送到 Telegram Bot，原邮件放进「验证码」文件夹，24 小时后自动清除。设置里可随时开关，Bot token 存在 DO 中。
+- **Agent 只读 API**：在设置 →「Agent 只读访问」生成 Bearer token（只显示一次，可限定来源、可撤销），供外部 agent 只读查询：
+  - `GET /api/everest/inbox?since=<时间>&limit=50`：增量拉取，返回 `emails`、`next_since`、`has_more`
+  - `GET /api/everest/search?q=<关键词>&from=<发件人>`
+  - `GET /api/everest/mail?id=<id>`：读取正文
 
-Read the blog post to learn more about Cloudflare Email Service and how to use it with the Agents SDK, MCP, and from the Wrangler CLI: [Email for Agents](https://blog.cloudflare.com/email-for-agents/).
+  该 API 只在 `AGENT_API_HOST` 指定的独立域名上提供，不经过 Cloudflare Access，只认 token。
+- **PWA**：可添加到手机主屏幕，独立窗口运行，适配移动端（dvh 布局、iOS 输入框不缩放）。
+- **AI 侧边栏**：保留上游的 Email Agent（Workers AI），可读取、搜索邮件；发送类操作在只收模式下不可用。上游的 `/mcp` 端点已关闭。
 
-## How to setup
+## 架构
 
-**Important**: Clicking the 'Deploy to Cloudflare' button is only one part of the setup. You must follow the **After deploying** steps as well. For a full step-by-step guide with screenshots, refer to this comment: 
-https://github.com/cloudflare/agentic-inbox/issues/4#issuecomment-4269118513
+```
+ Gmail (OAuth) ─┐
+ IMAP / POP3 ───┤  Cron 每分钟拉取
+                ▼
+ 转发邮件 ──> Email Routing ──> Hono Worker ──> MailboxDO（SQLite，每个邮箱一个）
+                                 │   │            └── R2：附件、邮箱设置
+         浏览器 / PWA ──Access──┘   │
+         外部 agent ──Bearer token──┘ (AGENT_API_HOST，只读)
+```
 
-### To set up
+- **前端**：React 19、React Router v7、Tailwind CSS、Zustand、`@cloudflare/kumo`
+- **后端**：Hono、Cloudflare Workers、Durable Objects（SQLite）、R2、Email Routing、Cron Triggers
+- **认证**：网页端走 Cloudflare Access（生产环境必须）；Agent API 走 Bearer token
 
-1. Deploy to Cloudflare. The deploy flow will automatically provision R2, Durable Objects, and Workers AI. You'll be prompted for **DOMAINS**, which is the domain (yourdomain.com) you want to receive emails for (email@yourdomain.com).
+## 部署
 
-     [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/cloudflare/agentic-inbox)
+### 前提
 
-2. **Configure Cloudflare Access** -- Enable [one-click Cloudflare Access](https://developers.cloudflare.com/changelog/post/2025-10-03-one-click-access-for-workers/) on your Worker under Settings > Domains & Routes. The modal will show your `POLICY_AUD` and `TEAM_DOMAIN` values. `TEAM_DOMAIN` can be either your Access team URL or the full `.../cdn-cgi/access/certs` URL. **You must set these as secrets for your Worker.**
-3. **Set up Email Routing** -- In the Cloudflare dashboard, go to your domain > Email Routing and create a catch-all rule that forwards to this Worker
-4. **Enable Email Service** -- The worker needs the `send_email` binding to send outbound emails. See [Email Service docs](https://developers.cloudflare.com/email-routing/email-workers/send-email-workers/)
-5. **Create a mailbox** -- Visit your deployed app and create a mailbox for any address on your domain (e.g. `hello@example.com`)
+- Cloudflare 账号和一个托管在 Cloudflare 的域名，开启 Email Routing
+- Workers 免费版即可（拉取任务已拆小，避开 10ms CPU 限制）
+- 可选：Google Cloud OAuth 客户端（接入 Gmail 用）、Telegram Bot（验证码推送用）
 
-### Troubleshooting Access
+### 步骤
 
-1. If you see `Invalid or expired Access token`, that usually means `POLICY_AUD` or `TEAM_DOMAIN` secrets are incorrect.
-   * Resolution: [turn Access off and back on for the Worker to get the Access modal again](https://developers.cloudflare.com/changelog/post/2025-10-03-one-click-access-for-workers/), then reset your Worker secrets to the latest `POLICY_AUD` and `TEAM_DOMAIN` values shown there.
-2. If you see `Cloudflare Access must be configured in production`, this application is intentionally enforcing Cloudflare Access so your inbox is not exposed to anyone on the internet.
-   * Resolution: enable Access using [one-click Cloudflare Access for Workers](https://developers.cloudflare.com/changelog/post/2025-10-03-one-click-access-for-workers/), then set the `POLICY_AUD` and `TEAM_DOMAIN` Worker secrets from the modal values.
+1. **安装依赖**
 
-## Features
+   ```bash
+   npm install
+   ```
 
-- **Full email client** — Send and receive emails via Cloudflare Email Routing with a rich text composer, reply/forward threading, folder organization, search, and attachments
-- **Per-mailbox isolation** — Each mailbox runs in its own Durable Object with SQLite storage and R2 for attachments
-- **Built-in AI agent** — Side panel with 9 email tools for reading, searching, drafting, and sending
-- **Auto-draft on new email** — Agent automatically reads inbound emails and generates draft replies, always requiring explicit confirmation before sending
-- **Configurable and persistent** — Custom system prompts per mailbox, persistent chat history, streaming markdown responses, and tool call visibility
+2. **创建 R2 存储桶**
 
-## Stack
+   ```bash
+   npx wrangler r2 bucket create unified-inbox
+   ```
 
-- **Frontend:** React 19, React Router v7, Tailwind CSS, Zustand, TipTap, `@cloudflare/kumo`
-- **Backend:** Hono, Cloudflare Workers, Durable Objects (SQLite), R2, Email Routing
-- **AI Agent:** Cloudflare Agents SDK (`AIChatAgent`), AI SDK v6, Workers AI (`@cf/moonshotai/kimi-k2.5`), `react-markdown` + `remark-gfm`
-- **Auth:** Cloudflare Access JWT validation (required outside local development)
+3. **修改 `wrangler.jsonc`** 的 `vars`：
 
-## Getting Started
+   | 变量 | 说明 |
+   | --- | --- |
+   | `DOMAINS` | 收信域名，如 `example.com` |
+   | `UNIFIED_MAILBOX` | 汇总到的邮箱地址，如 `inbox@example.com` |
+   | `IMAP_INITIAL_DAYS` | 首次同步回溯天数，默认 90 |
+   | `AGENT_API_HOST` | Agent 只读 API 的独立域名（同时在 `routes` 里配置为 custom domain） |
+   | `POLICY_AUD` / `TEAM_DOMAIN` | Cloudflare Access 的应用 AUD 和团队域名 |
+
+4. **设置 secrets**（接入 Gmail 时需要）
+
+   ```bash
+   npx wrangler secret put GOOGLE_CLIENT_ID
+   npx wrangler secret put GOOGLE_CLIENT_SECRET
+   ```
+
+   Google Cloud 里创建「Web 应用」类型的 OAuth 客户端，重定向 URI 填 `https://<你的 Worker 域名>/oauth/google/callback`，并把应用发布为「正式版」，否则每 7 天要重新登录。
+
+5. **部署**
+
+   ```bash
+   npm run deploy
+   ```
+
+   部署脚本会先构建，再把静态资源嵌入 Worker 包（`scripts/embed-assets.mjs`），然后 `wrangler deploy`。
+
+6. **部署后**
+   - **Cloudflare Access**：在 Worker 的 Settings → Domains & Routes 开启一键 Access，把弹窗里的 `POLICY_AUD`、`TEAM_DOMAIN` 填进配置。
+   - **Agent API 放行**：在 Access 里给 `<AGENT_API_HOST>/api/everest` 加一条 Bypass 策略；如果开了 Bot Fight Mode，需要关闭，否则外部 agent 会被人机验证拦下。
+   - **Email Routing**：域名 → Email Routing 建 catch-all 规则，指向这个 Worker。
+   - 打开网页，在设置里添加 Gmail / IMAP / POP3 来源，按需开启验证码转 Telegram、生成 Agent token。
+
+### 本地开发与测试
 
 ```bash
-npm install
 npm run dev
+for f in test/*.test.ts; do npx tsx "$f"; done   # IMAP、网易 IMAP、POP3、验证码识别的测试（node:assert 脚本）
 ```
 
-### Configuration
+## 已知限制
 
-1. Set your domain in `wrangler.jsonc`
-2. Create an R2 bucket named `agentic-inbox`: `wrangler r2 bucket create agentic-inbox`
+- 只收不发，没有发信功能。
+- Outlook/Hotmail 个人邮箱已不支持应用密码登录 IMAP，只能走转发，删除不会同步回去。
+- IMAP（授权码）和 POP3 来源只拉取，不回写删除/归档。
+- 删除整个邮箱时只删除了 R2 里的邮箱设置，Durable Object 中的数据和 R2 附件还没清理；用同一地址重建会看到旧邮件。单封邮件删除时附件会一并清除。
+- Cloudflare Access 是唯一的网页端信任边界：通过 Access 的人可以访问所有邮箱。
 
-### Deploy
+## 许可
 
-```bash
-npm run deploy
-```
-
-## Prerequisites
-
-- Cloudflare account with a domain
-- [Email Routing](https://developers.cloudflare.com/email-routing/) enabled for receiving
-- [Email Service](https://developers.cloudflare.com/email-service/) enabled for sending
-- [Workers AI](https://developers.cloudflare.com/workers-ai/) enabled (for the agent)
-- [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) configured for deployed/shared environments (required in production)
-
-Any user who passes the shared Cloudflare Access policy can access all mailboxes in this app by design. This includes the MCP server at `/mcp` -- external AI tools (Claude Code, Cursor, etc.) connected via MCP can operate on any mailbox by passing a `mailboxId` parameter. There is no per-mailbox authorization; the Cloudflare Access policy is the single trust boundary.
-
-## Architecture
-
-```
-┌──────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│   Browser    │────>│  Hono Worker     │────>│  MailboxDO      │
-│  React SPA   │     │  (API + SSR)     │     │  (SQLite + R2)  │
-│  Agent Panel │     │                  │     └─────────────────┘
-└──────┬───────┘     │  /agents/* ──────┼────>┌─────────────────┐
-       │             │                  │     │  EmailAgent DO  │
-       │ WebSocket   │                  │     │  (AIChatAgent)  │
-       └─────────────┤                  │     │  9 email tools  │
-                     │                  │────>│  Workers AI     │
-                     └──────────────────┘     └─────────────────┘
-```
-
-## License
-
-Apache 2.0 -- see [LICENSE](LICENSE).
+Apache 2.0，见 [LICENSE](LICENSE)。基于 [cloudflare/agentic-inbox](https://github.com/cloudflare/agentic-inbox)。
