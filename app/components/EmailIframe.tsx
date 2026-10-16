@@ -68,21 +68,39 @@ export default function EmailIframe({ body, autoSize }: EmailIframeProps) {
 
 		const padding = autoSize ? "0" : "24px";
 
-		// Height-reporting script: sends body.scrollHeight to the parent.
-		// Runs inside the opaque-origin sandbox so it has zero access to
-		// the parent page — it can only postMessage.
-		const heightScript = autoSize
-			? `<script>
-				function reportHeight() {
-					var h = document.body.scrollHeight;
-					if (h > 0) parent.postMessage({ __emailIframeHeight: true, height: h }, "*");
+		// Fit-to-width + height-reporting script. Runs inside the opaque-origin
+		// sandbox so it has zero access to the parent page; it can only
+		// postMessage. Newsletter mail is often laid out at a fixed 600-800px;
+		// on a narrow screen we first let it reflow via CSS, and whatever is
+		// still wider than the viewport is scaled down (like mobile Gmail).
+		const fitScript = `<script>
+			(function () {
+				var root = document.getElementById("__email_root");
+				var autoSize = ${autoSize ? "true" : "false"};
+				function fit() {
+					if (!root) return;
+					root.style.zoom = "";
+					var avail = root.clientWidth;
+					var w = root.scrollWidth;
+					if (avail > 0 && w > avail + 1) {
+						root.style.zoom = String(Math.max(avail / w, 0.3));
+					}
+					if (autoSize) {
+						var h = document.body.scrollHeight;
+						if (h > 0) parent.postMessage({ __emailIframeHeight: true, height: h }, "*");
+					}
 				}
-				reportHeight();
-				setTimeout(reportHeight, 50);
-				setTimeout(reportHeight, 150);
-				setTimeout(reportHeight, 400);
-			<\/script>`
-			: "";
+				fit();
+				setTimeout(fit, 50);
+				setTimeout(fit, 150);
+				setTimeout(fit, 400);
+				window.addEventListener("load", fit);
+				window.addEventListener("resize", function () { clearTimeout(window.__f); window.__f = setTimeout(fit, 100); });
+				Array.prototype.forEach.call(document.images, function (img) {
+					if (!img.complete) img.addEventListener("load", fit);
+				});
+			})();
+		<\/script>`;
 
 		// Use srcdoc so the iframe is truly sandboxed (no same-origin access).
 		// We can't use doc.write() because that requires allow-same-origin.
@@ -114,7 +132,16 @@ body {
 	position: relative !important;
 }
 a { color: #2563eb; }
-img { max-width: 100%; height: auto; }
+#__email_root { width: 100%; }
+img { max-width: 100% !important; height: auto !important; }
+pre { white-space: pre-wrap; }
+@media (max-width: 640px) {
+	/* Let fixed-width newsletter layouts reflow before falling back to scaling. */
+	table, tbody, tr, td, th, div, center { max-width: 100% !important; }
+	table[width], td[width], th[width] { width: auto !important; }
+	td, th { word-break: break-word; }
+	a { word-break: break-all; }
+}
 blockquote {
 	border-left: 3px solid #d1d5db;
 	padding-left: 1em;
@@ -135,7 +162,7 @@ h1, h2, h3 { margin: 8px 0 4px; }
 ul, ol { padding-left: 20px; margin: 4px 0; }
 </style>
 </head>
-<body>${cleanBody}${heightScript}</body>
+<body><div id="__email_root">${cleanBody}</div>${fitScript}</body>
 </html>`;
 	}, [body, autoSize]);
 
