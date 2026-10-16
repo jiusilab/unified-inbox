@@ -4,6 +4,7 @@
 
 import DOMPurify from "dompurify";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { emailBodyToHtml } from "~/lib/email-body";
 
 interface EmailIframeProps {
 	body: string;
@@ -59,7 +60,7 @@ export default function EmailIframe({ body, autoSize }: EmailIframeProps) {
 		const iframe = iframeRef.current;
 		if (!iframe || !body) return;
 
-		const cleanBody = DOMPurify.sanitize(body, {
+		const cleanBody = DOMPurify.sanitize(emailBodyToHtml(body), {
 			USE_PROFILES: { html: true },
 			FORBID_TAGS: ["style"],
 			ADD_ATTR: ["target"],
@@ -160,6 +161,27 @@ td, th { padding: 4px 8px; }
 p { margin: 4px 0; }
 h1, h2, h3 { margin: 8px 0 4px; }
 ul, ol { padding-left: 20px; margin: 4px 0; }
+.__plain { white-space: pre-wrap; }
+.__md { line-height: 1.65; }
+.__md p { margin: 0 0 0.8em; }
+.__md h1, .__md h2, .__md h3, .__md h4, .__md h5, .__md h6 { margin: 1.1em 0 0.5em; line-height: 1.3; font-weight: 600; }
+.__md > :first-child { margin-top: 0; }
+.__md h1 { font-size: 1.5em; padding-bottom: 0.3em; border-bottom: 1px solid #e5e7eb; }
+.__md h2 { font-size: 1.3em; padding-bottom: 0.25em; border-bottom: 1px solid #e5e7eb; }
+.__md h3 { font-size: 1.15em; }
+.__md h4, .__md h5, .__md h6 { font-size: 1em; }
+.__md ul, .__md ol { padding-left: 1.6em; margin: 0 0 0.8em; }
+.__md li { margin: 0.2em 0; }
+.__md li > p { margin: 0.2em 0; }
+.__md code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.9em; background: #f3f4f6; padding: 0.15em 0.35em; border-radius: 4px; }
+.__md pre { margin: 0 0 0.8em; white-space: pre; }
+.__md pre code { background: none; padding: 0; font-size: 13px; }
+.__md table { margin: 0 0 0.8em; display: block; overflow-x: auto; }
+.__md th, .__md td { border: 1px solid #d1d5db; padding: 6px 10px; text-align: left; }
+.__md th { background: #f9fafb; font-weight: 600; }
+.__md hr { border: 0; border-top: 1px solid #e5e7eb; margin: 1.2em 0; }
+.__md blockquote { margin: 0 0 0.8em; }
+.__md img { max-width: 100%; }
 </style>
 </head>
 <body><div id="__email_root">${cleanBody}</div>${fitScript}</body>
