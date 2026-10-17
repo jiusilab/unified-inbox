@@ -7,7 +7,10 @@
 	// Keep variables added in the Cloudflare dashboard across deploys.
 	"keep_vars": true,
 	// Read-only agent API host (bearer tokens, not behind Access). Serves /api/everest/* only.
-	"routes": [{ "pattern": "inbox-api.yuzh.de", "custom_domain": true }],
+	"routes": [
+		{ "pattern": "inbox-api.yuzh.de", "custom_domain": true },
+		{ "pattern": "mail.yuzh.de", "custom_domain": true }
+	],
 	"preview_urls": false,
 	"triggers": {
 		"crons": ["* * * * *"]
