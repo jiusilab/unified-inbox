@@ -678,6 +678,46 @@ export class MailboxDO extends DurableObject<Env> {
 		return true;
 	}
 
+	/**
+	 * Bulk action on list rows. Each id is a conversation's representative
+	 * email; it expands to every message of that thread in `folder` (or the
+	 * whole thread for read/unread), so the whole row is affected.
+	 */
+	async batchAction(
+		ids: string[],
+		action: "read" | "unread" | "archive" | "trash" | "delete",
+		folder?: string,
+	) {
+		const targets = new Set<string>();
+		for (const id of ids.slice(0, 500)) {
+			const row = [...this.ctx.storage.sql.exec(
+				`SELECT id, thread_id FROM emails WHERE id = ?`, id,
+			)][0] as { id: string; thread_id: string | null } | undefined;
+			if (!row) continue;
+			targets.add(row.id);
+			if (!row.thread_id) continue;
+			const sibs = action === "read" || action === "unread" || !folder
+				? this.ctx.storage.sql.exec(`SELECT id FROM emails WHERE thread_id = ?`, row.thread_id)
+				: this.ctx.storage.sql.exec(`SELECT id FROM emails WHERE thread_id = ? AND folder_id = ?`, row.thread_id, folder);
+			for (const s of sibs) targets.add(s.id as string);
+		}
+
+		const removed: { id: string; attachments: { id: string; filename: string }[] }[] = [];
+		for (const id of targets) {
+			if (action === "read" || action === "unread") {
+				await this.updateEmail(id, { read: action === "read" });
+			} else if (action === "archive") {
+				await this.moveEmail(id, Folders.ARCHIVE);
+			} else if (action === "trash") {
+				await this.moveEmail(id, Folders.TRASH);
+			} else {
+				const atts = await this.deleteEmail(id);
+				if (atts) removed.push({ id, attachments: atts as any });
+			}
+		}
+		return { count: targets.size, removed };
+	}
+
 	// ── Search (raw SQL — dynamic condition builder) ───────────────
 
 	/**

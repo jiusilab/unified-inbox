@@ -216,6 +216,22 @@ export function useDeleteEmail() {
 	});
 }
 
+export type BatchAction = "read" | "unread" | "archive" | "trash" | "delete";
+
+export function useBatchEmails() {
+	const invalidate = useInvalidateEmailData();
+	return useMutation({
+		mutationFn: ({
+			mailboxId,
+			ids,
+			action,
+			folder,
+		}: { mailboxId: string; ids: string[]; action: BatchAction; folder?: string }) =>
+			api.batchEmails(mailboxId, ids, action, folder),
+		onSettled: (_data, _err, { mailboxId }) => invalidate(mailboxId),
+	});
+}
+
 export function useMoveEmail() {
 	const invalidate = useInvalidateEmailData();
 	return useMutation({

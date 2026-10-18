@@ -123,6 +123,8 @@ const api = {
 		del<void>(`/api/v1/mailboxes/${mailboxId}/emails/${id}`),
 	moveEmail: (mailboxId: string, id: string, folderId: string) =>
 		post<void>(`/api/v1/mailboxes/${mailboxId}/emails/${id}/move`, { folderId }),
+	batchEmails: (mailboxId: string, ids: string[], action: string, folder?: string) =>
+		post<{ count: number }>(`/api/v1/mailboxes/${mailboxId}/emails/batch`, { ids, action, folder }),
 	getThread: (mailboxId: string, threadId: string, opts?: { signal?: AbortSignal }) =>
 		get<Email[]>(`/api/v1/mailboxes/${mailboxId}/threads/${threadId}`, { signal: opts?.signal }),
 	markThreadRead: (mailboxId: string, threadId: string) =>

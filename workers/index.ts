@@ -261,6 +261,16 @@ app.post("/api/v1/mailboxes/:mailboxId/emails/:id/move", async (c: AppContext) =
 	return success ? c.json({ status: "moved" }) : c.json({ error: "Folder not found" }, 400);
 });
 
+app.post("/api/v1/mailboxes/:mailboxId/emails/batch", async (c: AppContext) => {
+	const { ids, action, folder } = (await c.req.json()) as { ids: string[]; action: string; folder?: string };
+	if (!Array.isArray(ids) || !["read", "unread", "archive", "trash", "delete"].includes(action))
+		return c.json({ error: "Bad request" }, 400);
+	const res = await (c.var.mailboxStub as any).batchAction(ids, action, folder);
+	const keys = res.removed.flatMap((r: any) => r.attachments.map((att: any) => `attachments/${r.id}/${att.id}/${att.filename}`));
+	for (let i = 0; i < keys.length; i += 1000) await c.env.BUCKET.delete(keys.slice(i, i + 1000));
+	return c.json({ count: res.count });
+});
+
 // -- Threads --------------------------------------------------------
 
 app.get("/api/v1/mailboxes/:mailboxId/threads/:threadId", async (c: AppContext) => {

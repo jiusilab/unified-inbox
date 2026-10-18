@@ -15,6 +15,7 @@ import {
 	StarIcon,
 	TrashIcon,
 	TrayIcon,
+	XIcon,
 } from "@phosphor-icons/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -24,6 +25,7 @@ import { formatListDate } from "shared/dates";
 import MailboxSplitView from "~/components/MailboxSplitView";
 import { getSnippetText } from "~/lib/utils";
 import {
+	useBatchEmails,
 	useDeleteEmail,
 	useEmails,
 	useMarkThreadRead,
@@ -158,6 +160,8 @@ export default function EmailListRoute() {
 	const updateEmail = useUpdateEmail();
 	const markThreadRead = useMarkThreadRead();
 	const deleteEmail = useDeleteEmail();
+	const batchEmails = useBatchEmails();
+	const [checked, setChecked] = useState<Set<string>>(new Set());
 
 	const params = useMemo(
 		() => ({
@@ -197,7 +201,40 @@ export default function EmailListRoute() {
 			closePanel();
 			setPage(1);
 		}
-	}, [mailboxId, folder, closePanel]);
+		setChecked(new Set());
+	}, [mailboxId, folder, page, closePanel]);
+
+	// Drop ids that are no longer on the page (moved/deleted/refetched)
+	useEffect(() => {
+		setChecked((prev) => {
+			if (prev.size === 0) return prev;
+			const visible = new Set(emails.map((e) => e.id));
+			const next = new Set([...prev].filter((id) => visible.has(id)));
+			return next.size === prev.size ? prev : next;
+		});
+	}, [emails]);
+
+	const toggleChecked = (id: string) => {
+		setChecked((prev) => {
+			const next = new Set(prev);
+			if (next.has(id)) next.delete(id);
+			else next.add(id);
+			return next;
+		});
+	};
+	const allChecked = emails.length > 0 && checked.size === emails.length;
+	const toggleAll = () => {
+		setChecked(allChecked ? new Set() : new Set(emails.map((e) => e.id)));
+	};
+	const isTrash = folder === Folders.TRASH;
+	const runBatch = (action: "read" | "unread" | "archive" | "trash" | "delete") => {
+		if (!mailboxId || checked.size === 0) return;
+		if (action === "delete" && !window.confirm(`Permanently delete ${checked.size} conversation${checked.size > 1 ? "s" : ""}?`)) return;
+		const ids = [...checked];
+		if (selectedEmailId && ids.includes(selectedEmailId) && action !== "read" && action !== "unread") closePanel();
+		batchEmails.mutate({ mailboxId, ids, action, folder });
+		setChecked(new Set());
+	};
 
 	const toggleStar = (e: React.MouseEvent, email: Email) => {
 		e.preventDefault();
@@ -274,10 +311,51 @@ export default function EmailListRoute() {
 			isComposing={isComposing}
 		>
 				{/* Folder header */}
-				<div className="flex items-center justify-between px-4 py-3.5 border-b border-kumo-line shrink-0 md:px-5">
-					<h1 className="text-lg font-semibold text-kumo-default">
-						{folderName}
-					</h1>
+				<div className="flex items-center justify-between gap-2 px-4 py-3.5 border-b border-kumo-line shrink-0 md:px-5">
+					<div className="flex items-center gap-3 min-w-0">
+						{emails.length > 0 && (
+							<input
+								type="checkbox"
+								className="h-4 w-4 shrink-0 cursor-pointer accent-[var(--color-kumo-brand,#f6821f)]"
+								checked={allChecked}
+								ref={(el) => {
+									if (el) el.indeterminate = checked.size > 0 && !allChecked;
+								}}
+								onChange={toggleAll}
+								aria-label="Select all"
+							/>
+						)}
+						{checked.size > 0 ? (
+							<span className="text-sm font-medium text-kumo-default whitespace-nowrap">
+								{checked.size} selected
+							</span>
+						) : (
+							<h1 className="text-lg font-semibold text-kumo-default truncate">
+								{folderName}
+							</h1>
+						)}
+					</div>
+					{checked.size > 0 ? (
+						<div className="flex items-center gap-1 shrink-0">
+							<Tooltip content="Mark read" side="bottom" asChild>
+								<Button variant="ghost" shape="square" size="sm" icon={<EnvelopeOpenIcon size={18} />} onClick={() => runBatch("read")} aria-label="Mark read" />
+							</Tooltip>
+							<Tooltip content="Mark unread" side="bottom" asChild>
+								<Button variant="ghost" shape="square" size="sm" icon={<EnvelopeSimpleIcon size={18} />} onClick={() => runBatch("unread")} aria-label="Mark unread" />
+							</Tooltip>
+							{folder !== Folders.ARCHIVE && !isTrash && (
+								<Tooltip content="Archive" side="bottom" asChild>
+									<Button variant="ghost" shape="square" size="sm" icon={<ArchiveIcon size={18} />} onClick={() => runBatch("archive")} aria-label="Archive" />
+								</Tooltip>
+							)}
+							<Tooltip content={isTrash ? "Delete forever" : "Move to trash"} side="bottom" asChild>
+								<Button variant="ghost" shape="square" size="sm" icon={<TrashIcon size={18} />} onClick={() => runBatch(isTrash ? "delete" : "trash")} aria-label="Delete" />
+							</Tooltip>
+							<Tooltip content="Clear selection" side="bottom" asChild>
+								<Button variant="ghost" shape="square" size="sm" icon={<XIcon size={18} />} onClick={() => setChecked(new Set())} aria-label="Clear selection" />
+							</Tooltip>
+						</div>
+					) : (
 					<div className="flex items-center gap-1">
 						{totalCount > 0 && (
 							<span className="text-sm text-kumo-subtle mr-2 hidden sm:inline">
@@ -305,6 +383,7 @@ export default function EmailListRoute() {
 							/>
 						</Tooltip>
 					</div>
+					)}
 				</div>
 
 				{/* Email rows */}
@@ -330,8 +409,19 @@ export default function EmailListRoute() {
 										}}
 										className={`group flex items-center gap-3 w-full text-left cursor-pointer transition-colors border-b border-kumo-line px-4 py-2.5 md:px-6 md:py-3 ${
 											isPanelOpen ? "md:px-4 md:py-2.5" : ""
-										} ${isSelected ? "bg-kumo-tint" : "hover:bg-kumo-tint"}`}
+										} ${isSelected || checked.has(email.id) ? "bg-kumo-tint" : "hover:bg-kumo-tint"}`}
 									>
+										{/* Select */}
+										<input
+											type="checkbox"
+											className="h-4 w-4 shrink-0 cursor-pointer accent-[var(--color-kumo-brand,#f6821f)]"
+											checked={checked.has(email.id)}
+											onClick={(e) => e.stopPropagation()}
+											onKeyDown={(e) => e.stopPropagation()}
+											onChange={() => toggleChecked(email.id)}
+											aria-label="Select conversation"
+										/>
+
 										{/* Unread dot */}
 										<div className="w-2.5 shrink-0 flex justify-center">
 											{hasUnread(email) && (
