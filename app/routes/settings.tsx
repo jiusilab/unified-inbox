@@ -7,6 +7,9 @@ import { GoogleLogoIcon, TrashIcon, ArrowsClockwiseIcon, EnvelopeSimpleIcon } fr
 import { useEffect, useState } from "react";
 import { useParams, useSearchParams } from "react-router";
 import { useMailbox, useUpdateMailbox } from "~/queries/mailboxes";
+import { useQuery } from "@tanstack/react-query";
+import { queryKeys } from "~/queries/keys";
+import api from "~/services/api";
 
 // Placeholder shown in the textarea when no custom prompt is set.
 // The authoritative default prompt lives in workers/agent/index.ts (DEFAULT_SYSTEM_PROMPT).
@@ -112,6 +115,12 @@ const CONNECT_ERRORS: Record<string, string> = {
 
 function SourceAccounts() {
 	const toastManager = useKumoToastManager();
+	const { data: configData } = useQuery({
+		queryKey: queryKeys.config,
+		queryFn: () => api.getConfig(),
+		staleTime: Infinity,
+	});
+	const forwardDomain = configData?.domains?.[0] ?? "你的域名";
 	const [searchParams, setSearchParams] = useSearchParams();
 	const [accounts, setAccounts] = useState<SourceAccount[] | null>(null);
 	const [googleConfigured, setGoogleConfigured] = useState(true);
@@ -281,7 +290,7 @@ function SourceAccounts() {
 				</div>
 			)}
 			<p className="text-xs text-kumo-subtle mt-3">
-				Hotmail、linux.do、NodeSeek 等请设置转发到任意 @yuzh.de 地址。
+				Hotmail、linux.do、NodeSeek 等请设置转发到任意 @{forwardDomain} 地址。
 			</p>
 		</div>
 	);

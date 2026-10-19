@@ -19,3 +19,6 @@ skills-lock.json
 worker-configuration.d.ts
 worker-configuration.d.ts
 *.tsbuildinfo
+
+# local deploy config (copy from wrangler.example.jsonc)
+wrangler.jsonc

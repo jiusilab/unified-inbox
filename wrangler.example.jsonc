@@ -6,10 +6,11 @@
 	"workers_dev": true,
 	// Keep variables added in the Cloudflare dashboard across deploys.
 	"keep_vars": true,
-	// Read-only agent API host (bearer tokens, not behind Access). Serves /api/everest/* only.
+	// Custom domains: the web UI (behind Cloudflare Access) and the read-only agent API host
+	// (bearer tokens, not behind Access; serves /api/everest/* only). Remove if you only use workers.dev.
 	"routes": [
-		{ "pattern": "inbox-api.yuzh.de", "custom_domain": true },
-		{ "pattern": "mail.yuzh.de", "custom_domain": true }
+		{ "pattern": "inbox-api.example.com", "custom_domain": true },
+		{ "pattern": "mail.example.com", "custom_domain": true }
 	],
 	"preview_urls": false,
 	"triggers": {
@@ -25,16 +26,17 @@
 		// Production deploys must also define POLICY_AUD and TEAM_DOMAIN.
 		// TEAM_DOMAIN may be the base Access URL or the full /cdn-cgi/access/certs URL.
 		// The worker now fails closed outside local development if Access is not configured.
-		"POLICY_AUD": "71d56c7c2bd81a7ed2c0c4fcf8e1aab6ebbb3b12c374b0f42d26555b05128ca2",
-		"TEAM_DOMAIN": "https://lightyearsssr.cloudflareaccess.com",
-		"DOMAINS": "yuzh.de",
+		"POLICY_AUD": "your-access-application-aud-tag",
+		"TEAM_DOMAIN": "https://your-team.cloudflareaccess.com",
+		"DOMAINS": "example.com",
 		"EMAIL_ADDRESSES": [],
 		// Everything is collected into this one mailbox.
-		"UNIFIED_MAILBOX": "inbox@yuzh.de",
-		// IMAP sources. Credentials are Worker secrets: IMAP_GMAIL_USER, IMAP_GMAIL_PASS (app password).
-		"IMAP_ACCOUNTS": "gmail",
+		"UNIFIED_MAILBOX": "inbox@example.com",
+		// Optional legacy IMAP sources configured by env (most people add sources in Settings instead).
+		// e.g. "gmail" -> Worker secrets IMAP_GMAIL_USER / IMAP_GMAIL_PASS.
+		"IMAP_ACCOUNTS": "",
 		"IMAP_INITIAL_DAYS": "90",
-		"AGENT_API_HOST": "inbox-api.yuzh.de"
+		"AGENT_API_HOST": "inbox-api.example.com"
 	},
 	"r2_buckets": [
 		{

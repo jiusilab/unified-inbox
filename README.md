@@ -23,6 +23,8 @@ Unified Inbox 是 [cloudflare/agentic-inbox](https://github.com/cloudflare/agent
   - `GET /api/everest/mail?id=<id>`：读取正文
 
   该 API 只在 `AGENT_API_HOST` 指定的独立域名上提供，不经过 Cloudflare Access，只认 token。
+- **列表操作**：勾选多封（或表头全选当前页）后批量标记已读/未读、归档、删除。删除先进垃圾箱，在垃圾箱里再删才是彻底删除；操作作用到整个会话，Gmail 来源会同步回源邮箱。
+- **正文渲染**：HTML 邮件原样显示（沙箱 iframe）；Markdown 邮件按 GFM 渲染；纯文本保留换行并自动识别链接。手机上宽邮件会自动重排或缩放。
 - **PWA**：可添加到手机主屏幕，独立窗口运行，适配移动端（dvh 布局、iOS 输入框不缩放）。
 - **AI 侧边栏**：保留上游的 Email Agent（Workers AI），可读取、搜索邮件；发送类操作在只收模式下不可用。上游的 `/mcp` 端点已关闭。
 
@@ -64,7 +66,13 @@ Unified Inbox 是 [cloudflare/agentic-inbox](https://github.com/cloudflare/agent
    npx wrangler r2 bucket create unified-inbox
    ```
 
-3. **修改 `wrangler.jsonc`** 的 `vars`：
+3. **复制配置**，再修改 `wrangler.jsonc`（已加入 `.gitignore`，你的域名和 Access 配置不会被提交）：
+
+   ```bash
+   cp wrangler.example.jsonc wrangler.jsonc
+   ```
+
+   `routes` 里的两个 custom domain 分别是网页端和 Agent API，按需修改或删掉（只用 `*.workers.dev` 也可以）。`vars` 说明：
 
    | 变量 | 说明 |
    | --- | --- |
@@ -81,7 +89,16 @@ Unified Inbox 是 [cloudflare/agentic-inbox](https://github.com/cloudflare/agent
    npx wrangler secret put GOOGLE_CLIENT_SECRET
    ```
 
-   Google Cloud 里创建「Web 应用」类型的 OAuth 客户端，重定向 URI 填 `https://<你的 Worker 域名>/oauth/google/callback`，并把应用发布为「正式版」，否则每 7 天要重新登录。
+   Google Cloud 里创建「Web 应用」类型的 OAuth 客户端，并把应用发布为「正式版」，否则每 7 天要重新登录。
+
+   回调地址按你打开网页时的域名生成，所以**每个用来访问的域名都要登记一条**重定向 URI，例如：
+
+   ```
+   https://unified-inbox.<你的子域>.workers.dev/oauth/google/callback
+   https://mail.example.com/oauth/google/callback
+   ```
+
+   漏登记会在 Google 登录页看到「不符合 Google 的 OAuth 2.0 政策」。已接入的 Gmail 不受影响，token 与域名无关。
 
 5. **部署**
 
@@ -92,7 +109,7 @@ Unified Inbox 是 [cloudflare/agentic-inbox](https://github.com/cloudflare/agent
    部署脚本会先构建，再把静态资源嵌入 Worker 包（`scripts/embed-assets.mjs`），然后 `wrangler deploy`。
 
 6. **部署后**
-   - **Cloudflare Access**：在 Worker 的 Settings → Domains & Routes 开启一键 Access，把弹窗里的 `POLICY_AUD`、`TEAM_DOMAIN` 填进配置。
+   - **Cloudflare Access**：网页端的所有域名（`workers.dev` 和自定义域名）都要被 Access 保护。在 Worker 的 Settings → Domains & Routes 开启一键 Access，把弹窗里的 `POLICY_AUD`、`TEAM_DOMAIN` 填进配置。
    - **Agent API 放行**：在 Access 里给 `<AGENT_API_HOST>/api/everest` 加一条 Bypass 策略；如果开了 Bot Fight Mode，需要关闭，否则外部 agent 会被人机验证拦下。
    - **Email Routing**：域名 → Email Routing 建 catch-all 规则，指向这个 Worker。
    - 打开网页，在设置里添加 Gmail / IMAP / POP3 来源，按需开启验证码转 Telegram、生成 Agent token。
