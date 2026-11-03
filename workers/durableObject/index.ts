@@ -230,6 +230,14 @@ export class MailboxDO extends DurableObject<Env> {
 		return row?.total ?? 0;
 	}
 
+	/** Counter bumped by triggers on every write to emails (one-row read). */
+	async getEmailsVersion(): Promise<number> {
+		const row = [...this.ctx.storage.sql.exec(
+			`SELECT value FROM meta WHERE key = 'emails_version'`,
+		)][0] as { value: number } | undefined;
+		return row?.value ?? 0;
+	}
+
 	// ── Threaded queries (raw SQL — too complex for Drizzle's builder) ──
 
 	async getThreadedEmails(options: GetEmailsOptions = {}) {
@@ -313,14 +321,14 @@ export class MailboxDO extends DurableObject<Env> {
 		// Non-draft folders: full threading logic
 		const result = this.ctx.storage.sql.exec(
 			`WITH
-			folder_emails AS (
+			folder_emails AS MATERIALIZED (
 				SELECT *,
 					COALESCE(thread_id, id) as raw_thread_id,
 					${NORMALIZED_SUBJECT_SQL} as normalized_subject
 				FROM emails
 				WHERE folder_id = (SELECT id FROM folders WHERE name = ?1 OR id = ?1 LIMIT 1)
 			),
-			thread_to_conversation AS (
+			thread_to_conversation AS MATERIALIZED (
 				SELECT
 					raw_thread_id,
 					normalized_subject,
@@ -331,13 +339,17 @@ export class MailboxDO extends DurableObject<Env> {
 				FROM folder_emails
 				GROUP BY raw_thread_id, normalized_subject, thread_id
 			),
-			all_emails_with_conversation AS (
-				SELECT
-					e.*,
-					COALESCE(tc.conversation_id, COALESCE(e.thread_id, e.id)) as conversation_id
-				FROM emails e
-				LEFT JOIN thread_to_conversation tc
-					ON COALESCE(e.thread_id, e.id) = tc.raw_thread_id
+			-- Only emails that belong to a conversation present in this folder.
+			-- Split on thread_id so both branches can use an index instead of
+			-- scanning the whole emails table.
+			all_emails_with_conversation AS MATERIALIZED (
+				SELECT e.*, tc.conversation_id
+				FROM thread_to_conversation tc
+				JOIN emails e ON e.thread_id = tc.raw_thread_id
+				UNION ALL
+				SELECT e.*, tc.conversation_id
+				FROM thread_to_conversation tc
+				JOIN emails e ON e.id = tc.raw_thread_id AND e.thread_id IS NULL
 			),
 			conversation_stats AS (
 				SELECT
@@ -348,10 +360,6 @@ export class MailboxDO extends DurableObject<Env> {
 					GROUP_CONCAT(DISTINCT sender) as participants,
 					SUM(CASE WHEN folder_id = (SELECT id FROM folders WHERE name = 'draft' LIMIT 1) THEN 1 ELSE 0 END) as has_draft
 				FROM all_emails_with_conversation
-				WHERE conversation_id IN (
-					SELECT DISTINCT conversation_id FROM all_emails_with_conversation
-					WHERE folder_id = (SELECT id FROM folders WHERE name = ?1 OR id = ?1 LIMIT 1)
-				)
 				GROUP BY conversation_id
 			),
 			latest_message_per_conversation AS (

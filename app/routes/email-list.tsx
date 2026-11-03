@@ -30,6 +30,7 @@ import {
 	useEmails,
 	useMarkThreadRead,
 	useUpdateEmail,
+	useEmailsChangeWatcher,
 } from "~/queries/emails";
 import { useFolders } from "~/queries/folders";
 import { queryKeys } from "~/queries/keys";
@@ -175,7 +176,8 @@ export default function EmailListRoute() {
 	const {
 		data: emailData,
 		isFetching: isRefreshing,
-	} = useEmails(mailboxId, params, { refetchInterval: 30_000 });
+	} = useEmails(mailboxId, params);
+	useEmailsChangeWatcher(mailboxId);
 
 	const emails = emailData?.emails ?? [];
 	const totalCount = emailData?.totalCount ?? 0;

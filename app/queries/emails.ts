@@ -2,6 +2,7 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
+import { useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import api from "~/services/api";
 import type { Email } from "~/types";
@@ -45,6 +46,33 @@ export function useEmails(
 		enabled: !!mailboxId && (options?.enabled ?? true),
 		refetchInterval: options?.refetchInterval,
 	});
+}
+
+/**
+ * Poll a one-row change counter; when it moves, refresh email lists and
+ * folder counts. Replaces polling the (expensive) threaded list itself.
+ */
+export function useEmailsChangeWatcher(mailboxId: string | undefined, intervalMs = 30_000) {
+	const qc = useQueryClient();
+	const last = useRef<number | undefined>(undefined);
+	const { data } = useQuery<number>({
+		queryKey: ["emailsVersion", mailboxId ?? "_disabled"],
+		queryFn: async () => (await api.getEmailsVersion(mailboxId!)).version,
+		enabled: !!mailboxId,
+		refetchInterval: intervalMs,
+		staleTime: 0,
+	});
+	useEffect(() => {
+		last.current = undefined;
+	}, [mailboxId]);
+	useEffect(() => {
+		if (data === undefined || !mailboxId) return;
+		if (last.current !== undefined && last.current !== data) {
+			qc.invalidateQueries({ queryKey: ["emails", mailboxId] });
+			qc.invalidateQueries({ queryKey: queryKeys.folders.list(mailboxId) });
+		}
+		last.current = data;
+	}, [data, mailboxId, qc]);
 }
 
 export function useEmail(

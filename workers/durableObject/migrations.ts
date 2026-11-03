@@ -274,4 +274,19 @@ export const mailboxMigrations: Migration[] = [
 		name: "14_otp_folder",
 		sql: `INSERT OR IGNORE INTO folders (id, name, is_deletable) VALUES ('otp', '验证码', 0);`,
 	},
+	{
+		// Cheap change detection for the email list: any write to emails bumps a
+		// counter, so clients poll one row instead of re-running the threaded query.
+		name: "15_emails_version",
+		sql: `
+            CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0);
+            INSERT OR IGNORE INTO meta (key, value) VALUES ('emails_version', 0);
+            CREATE TRIGGER IF NOT EXISTS emails_version_ins AFTER INSERT ON emails
+            BEGIN UPDATE meta SET value = value + 1 WHERE key = 'emails_version'; END;
+            CREATE TRIGGER IF NOT EXISTS emails_version_upd AFTER UPDATE ON emails
+            BEGIN UPDATE meta SET value = value + 1 WHERE key = 'emails_version'; END;
+            CREATE TRIGGER IF NOT EXISTS emails_version_del AFTER DELETE ON emails
+            BEGIN UPDATE meta SET value = value + 1 WHERE key = 'emails_version'; END;
+        `,
+	},
 ];
