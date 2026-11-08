@@ -11,8 +11,10 @@ import {
 } from "@phosphor-icons/react";
 import { useState } from "react";
 import { useParams } from "react-router";
+import { useT, type MessageKey } from "~/lib/i18n";
 
 function CopyButton({ text }: { text: string }) {
+	const t = useT();
 	const [copied, setCopied] = useState(false);
 
 	const handleCopy = async () => {
@@ -26,7 +28,7 @@ function CopyButton({ text }: { text: string }) {
 	};
 
 	return (
-		<Tooltip content={copied ? "Copied!" : "Copy"} asChild>
+		<Tooltip content={copied ? t("mcp.copied") : t("common.copy")} asChild>
 			<Button
 				variant="ghost"
 				shape="square"
@@ -39,27 +41,28 @@ function CopyButton({ text }: { text: string }) {
 					)
 				}
 				onClick={handleCopy}
-				aria-label="Copy to clipboard"
+				aria-label={t("mcp.copyAria")}
 			/>
 		</Tooltip>
 	);
 }
 
-const TOOLS = [
-	{ name: "list_mailboxes", desc: "List all mailboxes" },
-	{ name: "list_emails", desc: "List emails in a folder" },
-	{ name: "get_email", desc: "Read a full email with body" },
-	{ name: "get_thread", desc: "Load a conversation thread" },
-	{ name: "search_emails", desc: "Search emails by query" },
-	{ name: "draft_reply", desc: "Draft a reply to an email" },
-	{ name: "send_reply", desc: "Send a reply" },
-	{ name: "send_email", desc: "Send a new email" },
-	{ name: "mark_email_read", desc: "Mark email as read/unread" },
-	{ name: "move_email", desc: "Move email to a folder" },
+const TOOLS: { name: string; desc: MessageKey }[] = [
+	{ name: "list_mailboxes", desc: "mcp.tool.list_mailboxes" },
+	{ name: "list_emails", desc: "mcp.tool.list_emails" },
+	{ name: "get_email", desc: "mcp.tool.get_email" },
+	{ name: "get_thread", desc: "mcp.tool.get_thread" },
+	{ name: "search_emails", desc: "mcp.tool.search_emails" },
+	{ name: "draft_reply", desc: "mcp.tool.draft_reply" },
+	{ name: "send_reply", desc: "mcp.tool.send_reply" },
+	{ name: "send_email", desc: "mcp.tool.send_email" },
+	{ name: "mark_email_read", desc: "mcp.tool.mark_email_read" },
+	{ name: "move_email", desc: "mcp.tool.move_email" },
 ];
 
 export default function MCPPanel() {
 	const { mailboxId } = useParams<{ mailboxId: string }>();
+	const t = useT();
 	const baseUrl =
 		typeof window !== "undefined" ? window.location.origin : "https://your-app.workers.dev";
 	const mcpUrl = `${baseUrl}/mcp`;
@@ -80,7 +83,7 @@ export default function MCPPanel() {
 						</div>
 						<div>
 							<h3 className="text-sm font-semibold text-kumo-default">
-								Connect via MCP
+								{t("mcp.connect")}
 							</h3>
 							<p className="text-xs text-kumo-subtle">
 								Model Context Protocol
@@ -88,17 +91,14 @@ export default function MCPPanel() {
 						</div>
 					</div>
 					<p className="text-xs text-kumo-subtle leading-relaxed">
-						This email agent exposes an MCP server so AI coding
-						assistants can manage your inbox directly — read emails,
-						search, draft replies, and send messages using natural
-						language.
+						{t("mcp.description")}
 					</p>
 				</div>
 
 				{/* MCP URL */}
 				<div className="space-y-1.5">
 					<label className="text-xs font-medium text-kumo-strong block">
-						Server URL
+						{t("mcp.serverUrl")}
 					</label>
 					<div className="relative group">
 						<div className="absolute right-1.5 top-1/2 -translate-y-1/2">
@@ -113,7 +113,7 @@ export default function MCPPanel() {
 				{/* Available tools */}
 				<div className="space-y-2">
 					<h4 className="text-xs uppercase tracking-wider font-semibold text-kumo-subtle px-0.5">
-						Available Tools
+						{t("mcp.tools")}
 					</h4>
 					<div className="border border-kumo-line rounded-lg divide-y divide-kumo-line">
 						{TOOLS.map((tool) => (
@@ -132,7 +132,7 @@ export default function MCPPanel() {
 									</span>
 								</div>
 								<span className="text-[11px] text-kumo-subtle shrink-0">
-									{tool.desc}
+									{t(tool.desc)}
 								</span>
 							</div>
 						))}

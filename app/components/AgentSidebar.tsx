@@ -6,26 +6,28 @@ import { Loader } from "@cloudflare/kumo";
 import { PlugsIcon, RobotIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import MCPPanel from "./MCPPanel";
+import { useT, type MessageKey } from "~/lib/i18n";
 
 function LazyAgentPanel() {
 	const [AgentChat, setAgentChat] = useState<React.ComponentType | null>(
 		null,
 	);
-	const [loadError, setLoadError] = useState<string | null>(null);
+	const t = useT();
+	const [loadError, setLoadError] = useState<MessageKey | null>(null);
 
 	useEffect(() => {
 		import("~/components/AgentPanel").then((mod) => {
 			setAgentChat(() => mod.default);
 		}).catch((err) => {
 			console.error("Failed to load AgentPanel:", err);
-			setLoadError("Failed to load agent panel");
+			setLoadError("agent.panelLoadError");
 		});
 	}, []);
 
 	if (loadError) {
 		return (
 			<div className="flex items-center justify-center h-full">
-				<span className="text-xs text-kumo-error">{loadError}</span>
+				<span className="text-xs text-kumo-error">{t(loadError)}</span>
 			</div>
 		);
 	}
@@ -33,7 +35,7 @@ function LazyAgentPanel() {
 		return (
 			<div className="flex flex-col items-center justify-center h-full gap-2">
 				<Loader size="base" />
-				<span className="text-xs text-kumo-subtle">Loading agent...</span>
+				<span className="text-xs text-kumo-subtle">{t("agent.loading")}</span>
 			</div>
 		);
 	}
@@ -41,6 +43,7 @@ function LazyAgentPanel() {
 }
 
 export default function AgentSidebar() {
+	const t = useT();
 	const [activeTab, setActiveTab] = useState<"agent" | "mcp">("agent");
 
 	return (
@@ -57,7 +60,7 @@ export default function AgentSidebar() {
 					}`}
 				>
 					<RobotIcon size={14} weight={activeTab === "agent" ? "fill" : "regular"} />
-					Agent
+					{t("agent.tab")}
 				</button>
 				<button
 					type="button"

@@ -22,6 +22,7 @@ import {
 	Scripts,
 	ScrollRestoration,
 } from "react-router";
+import { getHtmlLang, useLang, useT } from "~/lib/i18n";
 import { ApiError } from "~/services/api";
 import "./index.css";
 
@@ -76,8 +77,10 @@ const KumoLink = forwardRef<
 });
 
 export function Layout({ children }: { children: React.ReactNode }) {
+	const lang = useLang();
+	const t = useT();
 	return (
-		<html lang="en">
+		<html lang={getHtmlLang(lang)}>
 			<head>
 				<meta charSet="UTF-8" />
 				<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
@@ -92,10 +95,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
 				<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 				<meta name="apple-mobile-web-app-capable" content="yes" />
 				<meta name="mobile-web-app-capable" content="yes" />
-				<meta name="apple-mobile-web-app-title" content="Inbox" />
+				<meta name="apple-mobile-web-app-title" content={t("app.shortName")} />
 				<meta name="apple-mobile-web-app-status-bar-style" content="default" />
 				<meta name="theme-color" content="#ffffff" />
-				<title>Unified Inbox</title>
+				<title>{t("app.name")}</title>
 				<Meta />
 				<Links />
 			</head>
@@ -134,18 +137,18 @@ export default function App() {
 }
 
 export function ErrorBoundary({ error }: { error: unknown }) {
-	let title = "Something went wrong";
-	let description = "An unexpected error occurred. Please try again.";
+	const t = useT();
+	let title = t("error.title");
+	let description = t("error.description");
 	let status: number | null = null;
 
 	if (isRouteErrorResponse(error)) {
 		status = error.status;
 		if (error.status === 404) {
-			title = "Page not found";
-			description =
-				"The page you're looking for doesn't exist or has been moved.";
+			title = t("error.notFoundTitle");
+			description = t("error.notFoundDescription");
 		} else {
-			title = `Error ${error.status}`;
+			title = t("error.status", { status: error.status });
 			description = error.statusText || description;
 		}
 	} else if (error instanceof Error && import.meta.env.DEV) {
@@ -156,7 +159,7 @@ export function ErrorBoundary({ error }: { error: unknown }) {
 		<div className="flex items-center justify-center min-h-screen p-8">
 			<Empty
 				icon={<WarningIcon size={48} className="text-kumo-inactive" />}
-				title={status === 404 ? "404 — Page not found" : title}
+				title={status === 404 ? t("error.notFound404") : title}
 				description={description}
 				contents={
 					<Button
@@ -165,7 +168,7 @@ export function ErrorBoundary({ error }: { error: unknown }) {
 							window.location.href = "/";
 						}}
 					>
-						Go Home
+						{t("error.goHome")}
 					</Button>
 				}
 			/>

@@ -7,9 +7,11 @@ import { GoogleLogoIcon, TrashIcon, ArrowsClockwiseIcon, EnvelopeSimpleIcon } fr
 import { useEffect, useState } from "react";
 import { useParams, useSearchParams } from "react-router";
 import { useMailbox, useUpdateMailbox } from "~/queries/mailboxes";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "~/queries/keys";
 import api from "~/services/api";
+import { folderLabel, setLang, useLang, useT, type Lang, type MessageKey } from "~/lib/i18n";
+import { formatDateTime } from "~/lib/utils";
 
 // Placeholder shown in the textarea when no custom prompt is set.
 // The authoritative default prompt lives in workers/agent/index.ts (DEFAULT_SYSTEM_PROMPT).
@@ -18,6 +20,7 @@ const PROMPT_PLACEHOLDER = `You are an email assistant that helps manage this in
 export default function SettingsRoute() {
 	const { mailboxId } = useParams<{ mailboxId: string }>();
 	const toastManager = useKumoToastManager();
+	const t = useT();
 	const { data: mailbox } = useMailbox(mailboxId);
 	const updateMailboxMutation = useUpdateMailbox();
 
@@ -42,10 +45,10 @@ export default function SettingsRoute() {
 		};
 		try {
 			await updateMailboxMutation.mutateAsync({ mailboxId, settings });
-			toastManager.add({ title: "Settings saved!" });
+			toastManager.add({ title: t("settings.saved") });
 		} catch {
 			toastManager.add({
-				title: "Failed to save settings",
+				title: t("settings.saveFailed"),
 				variant: "error",
 			});
 		} finally {
@@ -65,32 +68,35 @@ export default function SettingsRoute() {
 
 	return (
 		<div className="max-w-2xl px-4 py-4 md:px-8 md:py-6 h-full overflow-y-auto">
-			<h1 className="text-lg font-semibold text-kumo-default mb-6">Settings</h1>
+			<h1 className="text-lg font-semibold text-kumo-default mb-6">{t("settings.title")}</h1>
 
 			<div className="space-y-6">
+				<LanguageSelector />
+
 				{/* Account */}
 				<div className="rounded-lg border border-kumo-line bg-kumo-base p-5">
 					<div className="text-sm font-medium text-kumo-default mb-4">
-						Account
+						{t("settings.account")}
 					</div>
 					<div className="space-y-3">
 						<Input
-							label="Display Name"
+							label={t("settings.displayName")}
 							value={displayName}
 							onChange={(e) => setDisplayName(e.target.value)}
 						/>
-						<Input label="Email" type="email" value={mailbox.email} disabled />
+						<Input label={t("settings.email")} type="email" value={mailbox.email} disabled />
 					</div>
 				</div>
 
 				<SourceAccounts />
+				<MailFilter />
 				<OtpTelegram />
 				<AgentTokens />
 
 				{/* Save */}
 				<div className="flex justify-end">
 					<Button variant="primary" onClick={handleSave} loading={isSaving}>
-						Save Changes
+						{t("settings.saveChanges")}
 					</Button>
 				</div>
 			</div>
@@ -107,20 +113,56 @@ type SourceAccount = {
 	error: string | null;
 };
 
-const CONNECT_ERRORS: Record<string, string> = {
-	access_denied: "已取消授权",
-	mail_scope_not_granted: "没有勾选「读取、撰写、发送和永久删除 Gmail 邮件」权限，请重新添加并勾选",
-	no_refresh_token: "Google 没有返回长期令牌，请重新添加一次",
+const CONNECT_ERRORS: Record<string, MessageKey> = {
+	access_denied: "sources.error.access_denied",
+	mail_scope_not_granted: "sources.error.mail_scope_not_granted",
+	no_refresh_token: "sources.error.no_refresh_token",
 };
+
+const LANGUAGE_OPTIONS: { value: Lang; label: string }[] = [
+	{ value: "zh", label: "中文" },
+	{ value: "en", label: "English" },
+];
+
+function LanguageSelector() {
+	const t = useT();
+	const lang = useLang();
+	return (
+		<div className="rounded-lg border border-kumo-line bg-kumo-base p-5">
+			<div className="flex flex-wrap items-center justify-between gap-3">
+				<div>
+					<div className="text-sm font-medium text-kumo-default">{t("settings.language")}</div>
+					<p className="text-xs text-kumo-subtle mt-0.5">{t("settings.languageHint")}</p>
+				</div>
+				<div role="radiogroup" aria-label={t("settings.language")} className="flex gap-2">
+					{LANGUAGE_OPTIONS.map((opt) => (
+						<button
+							key={opt.value}
+							type="button"
+							role="radio"
+							aria-checked={lang === opt.value}
+							lang={opt.value === "zh" ? "zh-CN" : "en"}
+							onClick={() => setLang(opt.value)}
+							className={`rounded-md border px-3 py-1 text-sm ${lang === opt.value ? "border-kumo-brand text-kumo-default bg-kumo-tint" : "border-kumo-line text-kumo-subtle hover:bg-kumo-recessed"}`}
+						>
+							{opt.label}
+						</button>
+					))}
+				</div>
+			</div>
+		</div>
+	);
+}
 
 function SourceAccounts() {
 	const toastManager = useKumoToastManager();
+	const t = useT();
 	const { data: configData } = useQuery({
 		queryKey: queryKeys.config,
 		queryFn: () => api.getConfig(),
 		staleTime: Infinity,
 	});
-	const forwardDomain = configData?.domains?.[0] ?? "你的域名";
+	const forwardDomain = configData?.domains?.[0] ?? t("sources.domainFallback");
 	const [searchParams, setSearchParams] = useSearchParams();
 	const [accounts, setAccounts] = useState<SourceAccount[] | null>(null);
 	const [googleConfigured, setGoogleConfigured] = useState(true);
@@ -138,16 +180,16 @@ function SourceAccounts() {
 		load();
 		const connected = searchParams.get("connected");
 		const err = searchParams.get("connect_error");
-		if (connected) toastManager.add({ title: `已添加 ${connected}，正在导入最近的邮件` });
-		if (err) toastManager.add({ title: `添加失败：${CONNECT_ERRORS[err] ?? err}`, variant: "error" });
+		if (connected) toastManager.add({ title: t("sources.connectedToast", { email: connected }) });
+		if (err) toastManager.add({ title: t("sources.connectFailed", { reason: CONNECT_ERRORS[err] ? t(CONNECT_ERRORS[err]) : err }), variant: "error" });
 		if (connected || err) setSearchParams({}, { replace: true });
-		const t = setInterval(load, 15_000);
-		return () => clearInterval(t);
+		const timer = setInterval(load, 15_000);
+		return () => clearInterval(timer);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
 	const remove = async (a: SourceAccount) => {
-		if (!confirm(`移除 ${a.email}？已导入的邮件会保留，但不再同步。`)) return;
+		if (!confirm(t("sources.removeConfirm", { email: a.email }))) return;
 		await fetch(`/api/v1/accounts/${encodeURIComponent(a.account)}`, { method: "DELETE" });
 		load();
 	};
@@ -171,10 +213,10 @@ function SourceAccounts() {
 			});
 			const j = (await res.json()) as { ok: boolean; error?: string };
 			if (!j.ok) {
-				setImapError(j.error || "添加失败");
+				setImapError(j.error || t("sources.addFailed"));
 				return;
 			}
-			toastManager.add({ title: `已添加 ${imapEmail}，正在导入` });
+			toastManager.add({ title: t("sources.addedImporting", { email: imapEmail }) });
 			setShowImap(false);
 			setImapEmail("");
 			setImapPass("");
@@ -198,16 +240,16 @@ function SourceAccounts() {
 	return (
 		<div className="rounded-lg border border-kumo-line bg-kumo-base p-5">
 			<div className="flex items-center justify-between mb-4">
-				<span className="text-sm font-medium text-kumo-default">邮箱来源</span>
+				<span className="text-sm font-medium text-kumo-default">{t("sources.title")}</span>
 				<Button variant="ghost" size="xs" icon={<ArrowsClockwiseIcon size={14} />} onClick={syncNow} loading={syncing}>
-					立即同步
+					{t("sources.syncNow")}
 				</Button>
 			</div>
 			{accounts === null ? (
 				<Loader />
 			) : (
 				<div className="space-y-2">
-					{accounts.length === 0 && <p className="text-xs text-kumo-subtle">还没有连接任何 Gmail。</p>}
+					{accounts.length === 0 && <p className="text-xs text-kumo-subtle">{t("sources.empty")}</p>}
 					{accounts.map((a) => (
 						<div key={a.account} className="flex items-center justify-between rounded-md border border-kumo-line px-3 py-2">
 							<div className="min-w-0">
@@ -219,20 +261,20 @@ function SourceAccounts() {
 								</div>
 								<div className={`text-xs ${a.error ? "text-kumo-danger" : "text-kumo-subtle"}`}>
 									{a.error
-										? `同步出错：${a.error}`
+										? t("sources.syncError", { error: a.error })
 										: !a.lastRunAt
-											? "等待首次同步"
+											? t("sources.waitingFirstSync")
 											: a.initialDone
-												? `已同步 · ${new Date(a.lastRunAt).toLocaleString()}`
-												: "正在导入最近 90 天的邮件…"}
+												? t("sources.synced", { time: formatDateTime(a.lastRunAt) })
+												: t("sources.importing")}
 								</div>
 							</div>
 							{a.kind !== "password" ? (
 								<Button variant="ghost" size="xs" icon={<TrashIcon size={14} />} onClick={() => remove(a)}>
-									移除
+									{t("common.remove")}
 								</Button>
 							) : (
-								<Badge variant="secondary">应用密码</Badge>
+								<Badge variant="secondary">{t("sources.appPassword")}</Badge>
 							)}
 						</div>
 					))}
@@ -245,11 +287,11 @@ function SourceAccounts() {
 						className="inline-flex items-center gap-2 rounded-md border border-kumo-line px-3 py-1.5 text-sm text-kumo-default hover:bg-kumo-recessed"
 					>
 						<GoogleLogoIcon size={16} weight="bold" />
-						用 Google 账号登录添加 Gmail
+						{t("sources.addGoogle")}
 					</a>
 				) : (
 					<p className="text-xs text-kumo-subtle">
-						需要先在 Worker 上设置 GOOGLE_CLIENT_ID 和 GOOGLE_CLIENT_SECRET。
+						{t("sources.googleNotConfigured")}
 					</p>
 				)}
 				<button
@@ -258,7 +300,7 @@ function SourceAccounts() {
 					className="inline-flex items-center gap-2 rounded-md border border-kumo-line px-3 py-1.5 text-sm text-kumo-default hover:bg-kumo-recessed"
 				>
 					<EnvelopeSimpleIcon size={16} />
-					添加 IMAP / POP3 邮箱
+					{t("sources.addImap")}
 				</button>
 			</div>
 			{showImap && (
@@ -276,21 +318,21 @@ function SourceAccounts() {
 						))}
 					</div>
 					{protocol === "pop3" && (
-						<p className="text-xs text-kumo-subtle">POP3 只拉取新邮件，邮件保留在原邮箱，删除和已读状态都不会同步回去。能用 IMAP 的邮箱优先用 IMAP。</p>
+						<p className="text-xs text-kumo-subtle">{t("sources.pop3Note")}</p>
 					)}
-					<Input label="邮箱地址" value={imapEmail} onChange={(e) => setImapEmail(e.target.value)} placeholder="name@163.com" />
-					<Input label="授权码" type="password" value={imapPass} onChange={(e) => setImapPass(e.target.value)} placeholder="邮箱设置里生成的客户端授权码，不是登录密码" />
-					<Input label={`${protocol.toUpperCase()} 服务器（可选）`} value={imapHost} onChange={(e) => setImapHost(e.target.value)} placeholder="163、126、QQ 等会自动识别" />
+					<Input label={t("sources.emailAddress")} value={imapEmail} onChange={(e) => setImapEmail(e.target.value)} placeholder="name@163.com" />
+					<Input label={t("sources.authCode")} type="password" value={imapPass} onChange={(e) => setImapPass(e.target.value)} placeholder={t("sources.authCodePlaceholder")} />
+					<Input label={t("sources.server", { protocol: protocol.toUpperCase() })} value={imapHost} onChange={(e) => setImapHost(e.target.value)} placeholder={t("sources.serverPlaceholder")} />
 					{imapError && <p className="text-xs text-kumo-danger">{imapError}</p>}
 					<div className="flex justify-end">
 						<Button variant="primary" size="sm" onClick={addImap} loading={adding}>
-							验证并添加
+							{t("sources.verifyAndAdd")}
 						</Button>
 					</div>
 				</div>
 			)}
 			<p className="text-xs text-kumo-subtle mt-3">
-				Hotmail、linux.do、NodeSeek 等请设置转发到任意 @{forwardDomain} 地址。
+				{t("sources.forwardHint", { domain: forwardDomain })}
 			</p>
 		</div>
 	);
@@ -299,6 +341,7 @@ function SourceAccounts() {
 type AgentToken = { id: string; name: string; sources: string[]; created_at: string; last_used_at: string | null };
 
 function AgentTokens() {
+	const t = useT();
 	const [tokens, setTokens] = useState<AgentToken[] | null>(null);
 	const [name, setName] = useState("");
 	const [sources, setSources] = useState("");
@@ -330,22 +373,22 @@ function AgentTokens() {
 	};
 
 	const revoke = async (id: string) => {
-		if (!confirm("吊销后使用这个 token 的 agent 会立刻失去访问权限，确定吗？")) return;
+		if (!confirm(t("tokens.revokeConfirm"))) return;
 		await fetch(`/api/v1/agent-tokens/${id}`, { method: "DELETE" });
 		await load();
 	};
 
 	return (
 		<div className="rounded-lg border border-kumo-line bg-kumo-base p-5">
-			<span className="text-sm font-medium text-kumo-default">Agent 只读访问</span>
-			<p className="text-xs text-kumo-subtle mt-1 mb-4">每个 token 只能读信，不能改动或发信。可以限定只看某几个邮箱。</p>
+			<span className="text-sm font-medium text-kumo-default">{t("tokens.title")}</span>
+			<p className="text-xs text-kumo-subtle mt-1 mb-4">{t("tokens.description")}</p>
 			{fresh && (
 				<div className="mb-4 rounded-md border border-kumo-brand bg-kumo-tint p-3">
-					<p className="text-xs text-kumo-default mb-2">新 token 只显示这一次，请现在复制给你的 agent：</p>
+					<p className="text-xs text-kumo-default mb-2">{t("tokens.freshNotice")}</p>
 					<div className="flex items-center gap-2">
 						<code className="flex-1 break-all text-xs">{fresh}</code>
-						<Button size="xs" variant="secondary" onClick={() => navigator.clipboard.writeText(fresh)}>复制</Button>
-						<Button size="xs" variant="ghost" onClick={() => setFresh(null)}>完成</Button>
+						<Button size="xs" variant="secondary" onClick={() => navigator.clipboard.writeText(fresh)}>{t("common.copy")}</Button>
+						<Button size="xs" variant="ghost" onClick={() => setFresh(null)}>{t("common.done")}</Button>
 					</div>
 				</div>
 			)}
@@ -353,32 +396,32 @@ function AgentTokens() {
 				<Loader />
 			) : (
 				<div className="space-y-2 mb-4">
-					{tokens.length === 0 && <p className="text-xs text-kumo-subtle">还没有 token。</p>}
-					{tokens.map((t) => (
-						<div key={t.id} className="flex items-center justify-between rounded-md border border-kumo-line px-3 py-2">
+					{tokens.length === 0 && <p className="text-xs text-kumo-subtle">{t("tokens.empty")}</p>}
+					{tokens.map((tok) => (
+						<div key={tok.id} className="flex items-center justify-between rounded-md border border-kumo-line px-3 py-2">
 							<div className="min-w-0">
-								<div className="text-sm text-kumo-default">{t.name}</div>
+								<div className="text-sm text-kumo-default">{tok.name}</div>
 								<div className="text-xs text-kumo-subtle truncate">
-									{t.sources.length ? `只看：${t.sources.join("、")}` : "全部邮箱"}
+									{tok.sources.length ? t("tokens.onlySources", { sources: tok.sources.join(t("common.listSeparator")) }) : t("tokens.allMailboxes")}
 									{" · "}
-									{t.last_used_at ? `上次使用 ${t.last_used_at} UTC` : "未使用"}
+									{tok.last_used_at ? t("tokens.lastUsed", { time: tok.last_used_at }) : t("tokens.neverUsed")}
 								</div>
 							</div>
-							<Button variant="ghost" shape="square" size="sm" icon={<TrashIcon size={14} />} onClick={() => revoke(t.id)} aria-label="吊销" />
+							<Button variant="ghost" shape="square" size="sm" icon={<TrashIcon size={14} />} onClick={() => revoke(tok.id)} aria-label={t("tokens.revoke")} />
 						</div>
 					))}
 				</div>
 			)}
 			<div className="space-y-2">
-				<Input label="名称" value={name} onChange={(e) => setName(e.target.value)} placeholder="everest" />
+				<Input label={t("tokens.name")} value={name} onChange={(e) => setName(e.target.value)} placeholder="everest" />
 				<Input
-					label="限定邮箱（可选）"
+					label={t("tokens.sources")}
 					value={sources}
 					onChange={(e) => setSources(e.target.value)}
-					placeholder="多个用逗号分隔，留空表示全部"
+					placeholder={t("tokens.sourcesPlaceholder")}
 				/>
 				<div className="flex justify-end">
-					<Button variant="primary" size="sm" onClick={create} loading={creating}>生成 token</Button>
+					<Button variant="primary" size="sm" onClick={create} loading={creating}>{t("tokens.create")}</Button>
 				</div>
 			</div>
 		</div>
@@ -388,6 +431,7 @@ function AgentTokens() {
 type OtpState = { enabled: boolean; chatId: string | null; chatName: string | null; lastPush: string | null; hasToken: boolean };
 
 function OtpTelegram() {
+	const t = useT();
 	const [st, setSt] = useState<OtpState | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [err, setErr] = useState<string | null>(null);
@@ -401,18 +445,18 @@ function OtpTelegram() {
 			const txt = await r.text();
 			let j: any = null;
 			try { j = JSON.parse(txt); } catch { /* not json */ }
-			if (!j) setErr(`保存失败（HTTP ${r.status}）：${txt.slice(0, 120)}`);
+			if (!j) setErr(t("otp.saveFailedHttp", { status: r.status, body: txt.slice(0, 120) }));
 			else if (!j.ok) setErr(j.error);
 			else { setTok(""); setErr(null); }
 			await load();
 		} catch (e) {
-			setErr(`保存失败：${(e as Error).message}`);
+			setErr(t("otp.saveFailed", { message: (e as Error).message }));
 		} finally { setBusy(false); }
 	};
 	const load = async () => {
 		const r = await fetch("/api/v1/otp");
 		if (r.ok) setSt(await r.json());
-		else setErr(`读取状态失败（HTTP ${r.status}）`);
+		else setErr(t("otp.loadFailedHttp", { status: r.status }));
 	};
 	useEffect(() => { load(); }, []);
 
@@ -421,11 +465,11 @@ function OtpTelegram() {
 		try {
 			const r = await fetch("/api/v1/otp/bind", { method: "POST" });
 			const j: any = await r.json().catch(() => null);
-			if (!j) setErr(`绑定失败（HTTP ${r.status}）`);
+			if (!j) setErr(t("otp.bindFailedHttp", { status: r.status }));
 			else if (!j.ok) setErr(j.error);
 			await load();
 		} catch (e) {
-			setErr(`绑定失败：${(e as Error).message}`);
+			setErr(t("otp.bindFailed", { message: (e as Error).message }));
 		} finally { setBusy(false); }
 	};
 	const toggle = async () => {
@@ -436,23 +480,24 @@ function OtpTelegram() {
 				method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !st.enabled }),
 			});
 			const j: any = await r.json().catch(() => null);
-			if (!j) setErr(`切换失败（HTTP ${r.status}），可能登录已过期，刷新页面再试`);
+			if (!j) setErr(t("otp.toggleFailedHttp", { status: r.status }));
 			else if (!j.ok) setErr(j.error);
 			await load();
 		} catch (e) {
-			setErr(`切换失败：${(e as Error).message}`);
+			setErr(t("otp.toggleFailed", { message: (e as Error).message }));
 		} finally { setBusy(false); }
 	};
 
 	return (
 		<div className="rounded-lg border border-kumo-line bg-kumo-base p-5">
 			<div className="flex items-center justify-between">
-				<span className="text-sm font-medium text-kumo-default">验证码推送到 Telegram</span>
+				<span className="text-sm font-medium text-kumo-default">{t("otp.title")}</span>
 				{st && (
 					<button
 						type="button"
 						role="switch"
 						aria-checked={st.enabled}
+						aria-label={t("otp.title")}
 						disabled={busy || !st.chatId}
 						onClick={toggle}
 						className={`relative h-5 w-9 rounded-full transition-colors disabled:opacity-40 ${st.enabled ? "bg-kumo-brand" : "bg-kumo-line"}`}
@@ -462,7 +507,7 @@ function OtpTelegram() {
 				)}
 			</div>
 			<p className="text-xs text-kumo-subtle mt-1 mb-3">
-				新到的验证码邮件只把验证码和发件人推到 Telegram，原信移到「验证码」文件夹，24 小时后自动删除。账单、扣款、密码重置类邮件不会被处理。Telegram 发送失败时邮件留在收件箱。
+				{t("otp.description", { folder: folderLabel(t, "otp") })}
 			</p>
 			{st === null ? <Loader /> : !st.hasToken ? (
 				<div className="flex items-center gap-2">
@@ -470,21 +515,191 @@ function OtpTelegram() {
 						type="password"
 						value={tok}
 						onChange={(e) => setTok(e.target.value)}
-						placeholder="粘贴 @BotFather 给的机器人 token"
+						placeholder={t("otp.tokenPlaceholder")}
 						className="flex-1 rounded-md border border-kumo-line bg-kumo-base px-2 py-1 text-xs"
 					/>
-					<Button size="xs" variant="secondary" onClick={saveTok} loading={busy} disabled={!tok.trim()}>保存</Button>
+					<Button size="xs" variant="secondary" onClick={saveTok} loading={busy} disabled={!tok.trim()}>{t("common.save")}</Button>
 				</div>
 			) : (
 				<div className="flex items-center justify-between gap-2">
 					<span className="text-xs text-kumo-subtle">
-						{st.chatId ? `已绑定 ${st.chatName || st.chatId}` : "未绑定：先给机器人发一句话，再点绑定"}
-						{st.lastPush ? ` · 上次推送 ${new Date(st.lastPush).toLocaleString()}` : ""}
+						{st.chatId ? t("otp.bound", { name: st.chatName || st.chatId }) : t("otp.unbound")}
+						{st.lastPush ? t("otp.lastPush", { time: formatDateTime(st.lastPush) }) : ""}
 					</span>
-					<Button size="xs" variant="secondary" onClick={bind} loading={busy}>{st.chatId ? "重新绑定" : "绑定"}</Button>
+					<Button size="xs" variant="secondary" onClick={bind} loading={busy}>{st.chatId ? t("otp.rebind") : t("otp.bind")}</Button>
 				</div>
 			)}
 			{err && <p className="text-xs text-kumo-danger mt-2">{err}</p>}
+		</div>
+	);
+}
+
+
+type FilterSettings = {
+	llm: { enabled: boolean; endpoint: string; model: string; hasKey: boolean };
+	lastError: string | null;
+	ruleCounts: Record<string, number>;
+};
+type SenderRule = { pattern: string; kind: "allow" | "spam" | "promo"; origin: "learned" | "manual"; created_at: string };
+
+async function jsonFetch(url: string, init?: RequestInit) {
+	const r = await fetch(url, { ...init, headers: { "content-type": "application/json", ...(init?.headers || {}) } });
+	const txt = await r.text();
+	let j: any = null;
+	try { j = JSON.parse(txt); } catch {}
+	if (!r.ok || !j) throw new Error(j?.error || `HTTP ${r.status}`);
+	return j;
+}
+
+function MailFilter() {
+	const t = useT();
+	const qc = useQueryClient();
+	const [st, setSt] = useState<FilterSettings | null>(null);
+	const [rules, setRules] = useState<SenderRule[]>([]);
+	const [endpoint, setEndpoint] = useState("");
+	const [model, setModel] = useState("");
+	const [apiKey, setApiKey] = useState("");
+	const [pattern, setPattern] = useState("");
+	const [kind, setKind] = useState<SenderRule["kind"]>("promo");
+	const [busy, setBusy] = useState<string | null>(null);
+	const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+	const load = async () => {
+		try {
+			const [s, r] = await Promise.all([jsonFetch("/api/v1/classify"), jsonFetch("/api/v1/classify/rules")]);
+			setSt(s);
+			setEndpoint(s.llm.endpoint);
+			setModel(s.llm.model);
+			setRules(r);
+		} catch (e) {
+			setMsg({ ok: false, text: t("filter.error", { message: (e as Error).message }) });
+		}
+	};
+	useEffect(() => { load(); }, []);
+
+	const run = async (name: string, fn: () => Promise<void>) => {
+		setBusy(name);
+		setMsg(null);
+		try { await fn(); } catch (e) { setMsg({ ok: false, text: t("filter.error", { message: (e as Error).message }) }); }
+		setBusy(null);
+	};
+
+	const saveLlm = (enabled?: boolean, clearKey?: boolean) => run("llm", async () => {
+		const j = await jsonFetch("/api/v1/classify/llm", {
+			method: "POST",
+			body: JSON.stringify({ endpoint, model, apiKey: apiKey || undefined, enabled, clearKey }),
+		});
+		if (!j.ok) throw new Error(j.error);
+		setSt(j.settings);
+		setApiKey("");
+		setMsg({ ok: true, text: t("filter.saved") });
+	});
+
+	const test = () => run("test", async () => {
+		const j = await jsonFetch("/api/v1/classify/llm/test", { method: "POST" });
+		if (!j.ok) throw new Error(j.error);
+		setMsg({ ok: true, text: t("filter.testOk", { result: folderLabel(t, j.sample === "inbox" ? "inbox" : j.sample) }) });
+	});
+
+	const addRule = () => run("rule", async () => {
+		const j = await jsonFetch("/api/v1/classify/rules", { method: "POST", body: JSON.stringify({ pattern, kind }) });
+		if (!j.ok) throw new Error(j.error);
+		setPattern("");
+		await load();
+	});
+
+	const delRule = (p: string) => run("rule", async () => {
+		await jsonFetch(`/api/v1/classify/rules?pattern=${encodeURIComponent(p)}`, { method: "DELETE" });
+		setRules((rs) => rs.filter((r) => r.pattern !== p));
+	});
+
+	const rescan = () => run("rescan", async () => {
+		const j = await jsonFetch("/api/v1/classify/rescan", { method: "POST" });
+		setMsg({ ok: true, text: t("filter.rescanDone", { scanned: j.scanned, promotions: j.moved.promotions, spam: j.moved.spam, remaining: j.remaining }) });
+		qc.invalidateQueries({ queryKey: ["emails"] });
+		qc.invalidateQueries({ queryKey: ["folders"] });
+	});
+
+	const inputCls = "w-full rounded-md border border-kumo-line bg-kumo-base px-2 py-1 text-xs";
+	const kindLabel = (k: SenderRule["kind"]) => t(`filter.kind.${k}` as MessageKey);
+
+	return (
+		<div className="rounded-lg border border-kumo-line bg-kumo-base p-5 space-y-4">
+			<div>
+				<span className="text-sm font-medium text-kumo-default">{t("filter.title")}</span>
+				<p className="text-xs text-kumo-subtle mt-1">{t("filter.description")}</p>
+			</div>
+
+			{st === null ? <Loader /> : (
+				<>
+					<div className="space-y-2">
+						<div className="flex items-center justify-between">
+							<span className="text-xs font-medium text-kumo-default">{t("filter.rules")}</span>
+							<Button size="xs" variant="secondary" onClick={rescan} loading={busy === "rescan"}>{t("filter.rescan")}</Button>
+						</div>
+						<p className="text-xs text-kumo-subtle">{t("filter.rescanHint")}</p>
+						<div className="flex items-center gap-2">
+							<input value={pattern} onChange={(e) => setPattern(e.target.value)} placeholder={t("filter.patternPlaceholder")} className={inputCls} />
+							<select value={kind} onChange={(e) => setKind(e.target.value as SenderRule["kind"])} className="rounded-md border border-kumo-line bg-kumo-base px-1 py-1 text-xs">
+								<option value="allow">{kindLabel("allow")}</option>
+								<option value="promo">{kindLabel("promo")}</option>
+								<option value="spam">{kindLabel("spam")}</option>
+							</select>
+							<Button size="xs" variant="secondary" onClick={addRule} loading={busy === "rule"} disabled={!pattern.trim()}>{t("filter.add")}</Button>
+						</div>
+						{rules.length === 0 ? (
+							<p className="text-xs text-kumo-subtle">{t("filter.rulesEmpty")}</p>
+						) : (
+							<ul className="max-h-56 overflow-y-auto divide-y divide-kumo-line rounded-md border border-kumo-line">
+								{rules.map((r) => (
+									<li key={r.pattern} className="flex items-center gap-2 px-2 py-1 text-xs">
+										<span className="flex-1 truncate font-mono">{r.pattern}</span>
+										<Badge variant={r.kind === "spam" ? "destructive" : r.kind === "allow" ? "primary" : "secondary"}>{kindLabel(r.kind)}</Badge>
+										<span className="text-kumo-subtle w-16 text-right">{t(`filter.origin.${r.origin}` as MessageKey)}</span>
+										<button type="button" onClick={() => delRule(r.pattern)} aria-label={t("filter.remove")} className="text-kumo-subtle hover:text-kumo-danger">
+											<TrashIcon size={14} />
+										</button>
+									</li>
+								))}
+							</ul>
+						)}
+					</div>
+
+					<div className="space-y-2 border-t border-kumo-line pt-4">
+						<div className="flex items-center justify-between">
+							<span className="text-xs font-medium text-kumo-default">{t("filter.llm")}</span>
+							<button
+								type="button"
+								role="switch"
+								aria-checked={st.llm.enabled}
+								aria-label={t("filter.enable")}
+								disabled={busy !== null}
+								onClick={() => saveLlm(!st.llm.enabled)}
+								className={`relative h-5 w-9 rounded-full transition-colors disabled:opacity-40 ${st.llm.enabled ? "bg-kumo-brand" : "bg-kumo-line"}`}
+							>
+								<span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${st.llm.enabled ? "left-[18px]" : "left-0.5"}`} />
+							</button>
+						</div>
+						<p className="text-xs text-kumo-subtle">{t("filter.llmHint")}</p>
+						<label className="block text-xs text-kumo-subtle">{t("filter.endpoint")}
+							<input value={endpoint} onChange={(e) => setEndpoint(e.target.value)} placeholder="https://openrouter.ai/api/v1" className={inputCls + " mt-1"} />
+						</label>
+						<label className="block text-xs text-kumo-subtle">{t("filter.model")}
+							<input value={model} onChange={(e) => setModel(e.target.value)} placeholder="openai/gpt-4o-mini" className={inputCls + " mt-1"} />
+						</label>
+						<label className="block text-xs text-kumo-subtle">{t("filter.apiKey")}
+							<input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={st.llm.hasKey ? t("filter.apiKeySaved") : ""} className={inputCls + " mt-1"} autoComplete="off" />
+						</label>
+						<div className="flex items-center justify-end gap-2">
+							{st.llm.hasKey && <Button size="xs" variant="ghost" onClick={() => saveLlm(false, true)} disabled={busy !== null}>{t("filter.clearKey")}</Button>}
+							<Button size="xs" variant="secondary" onClick={test} loading={busy === "test"} disabled={!st.llm.hasKey}>{t("filter.test")}</Button>
+							<Button size="xs" variant="primary" onClick={() => saveLlm()} loading={busy === "llm"}>{t("common.save")}</Button>
+						</div>
+						{st.lastError && <p className="text-xs text-kumo-subtle">{t("filter.lastError", { error: st.lastError })}</p>}
+					</div>
+				</>
+			)}
+			{msg && <p className={`text-xs ${msg.ok ? "text-kumo-subtle" : "text-kumo-danger"}`}>{msg.text}</p>}
 		</div>
 	);
 }

@@ -6,6 +6,7 @@ import EmailAttachmentList from "~/components/EmailAttachmentList";
 import EmailIframe from "~/components/EmailIframe";
 import { formatDetailDate, rewriteInlineImages } from "~/lib/utils";
 import type { Email } from "~/types";
+import { useT } from "~/lib/i18n";
 
 interface SingleMessageViewProps {
 	email: Email;
@@ -18,6 +19,7 @@ export default function SingleMessageView({
 	mailboxId,
 	onPreviewImage,
 }: SingleMessageViewProps) {
+	const t = useT();
 	return (
 		<div className="flex flex-col h-full">
 			<div className="px-4 py-4 border-b border-kumo-line md:px-6">
@@ -30,7 +32,7 @@ export default function SingleMessageView({
 							<div className="text-sm font-medium text-kumo-default truncate">
 								{email.sender}
 							</div>
-							<div className="text-xs text-kumo-subtle">To: {email.recipient}</div>
+							<div className="text-xs text-kumo-subtle">{t("panel.toLine", { recipients: email.recipient })}</div>
 						</div>
 					</div>
 					<span className="text-xs text-kumo-subtle shrink-0">

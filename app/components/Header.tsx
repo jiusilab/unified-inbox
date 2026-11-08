@@ -7,8 +7,10 @@ import { GearSixIcon, ListIcon, MagnifyingGlassIcon, RobotIcon, XIcon } from "@p
 import { type KeyboardEvent, useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import { useUIStore } from "~/hooks/useUIStore";
+import { useT } from "~/lib/i18n";
 
 export default function Header() {
+	const t = useT();
 	const [searchQuery, setSearchQuery] = useState("");
 	const [isSearchExpanded, setIsSearchExpanded] = useState(false);
 	const { mailboxId } = useParams<{ mailboxId: string }>();
@@ -64,7 +66,7 @@ export default function Header() {
 				size="sm"
 				icon={<ListIcon size={20} />}
 				onClick={toggleSidebar}
-				aria-label="Toggle sidebar"
+				aria-label={t("header.toggleSidebar")}
 				className="md:hidden shrink-0"
 			/>
 
@@ -77,8 +79,8 @@ export default function Header() {
 				<div className="flex-1 relative flex items-center">
 					<Input
 						className="w-full"
-						aria-label="Search emails"
-						placeholder="Search emails... (try from:name, is:unread, has:attachment)"
+						aria-label={t("header.searchAria")}
+						placeholder={t("header.searchPlaceholder")}
 						value={searchQuery}
 						onChange={(e) => setSearchQuery(e.target.value)}
 						onKeyDown={handleKeyDown}
@@ -88,19 +90,19 @@ export default function Header() {
 							type="button"
 							onClick={clearSearch}
 							className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-kumo-subtle hover:text-kumo-default hover:bg-kumo-tint transition-colors"
-							aria-label="Clear search"
+							aria-label={t("header.clearSearch")}
 						>
 							<XIcon size={14} />
 						</button>
 					)}
 				</div>
-				<Tooltip content="Search" side="bottom" asChild>
+				<Tooltip content={t("common.search")} side="bottom" asChild>
 					<Button
 						variant="ghost"
 						shape="square"
 						icon={<MagnifyingGlassIcon size={20} />}
 						onClick={performSearch}
-						aria-label="Search"
+						aria-label={t("common.search")}
 					/>
 				</Tooltip>
 			</div>
@@ -113,23 +115,23 @@ export default function Header() {
 					size="sm"
 					icon={<MagnifyingGlassIcon size={20} />}
 					onClick={() => setIsSearchExpanded(true)}
-					aria-label="Search"
+					aria-label={t("common.search")}
 					className="md:hidden shrink-0"
 				/>
 			)}
 
 			<div className="flex items-center gap-1 ml-auto shrink-0">
-				{false && <Tooltip content={isAgentPanelOpen ? "Hide agent panel" : "Show agent panel"} side="bottom" asChild>
+				{false && <Tooltip content={isAgentPanelOpen ? t("header.hideAgent") : t("header.showAgent")} side="bottom" asChild>
 					<Button
 						variant={isAgentPanelOpen ? "secondary" : "ghost"}
 						shape="square"
 						icon={<RobotIcon size={20} />}
 						onClick={toggleAgentPanel}
-						aria-label="Toggle agent panel"
+						aria-label={t("header.toggleAgent")}
 						className="hidden lg:inline-flex"
 					/>
 				</Tooltip>}
-				<Tooltip content="Settings" side="bottom" asChild>
+				<Tooltip content={t("common.settings")} side="bottom" asChild>
 					<Button
 						variant={isSettingsActive ? "secondary" : "ghost"}
 						shape="square"
@@ -141,7 +143,7 @@ export default function Header() {
 									: `/mailbox/${mailboxId}/settings`,
 							)
 						}
-						aria-label="Settings"
+						aria-label={t("common.settings")}
 					/>
 				</Tooltip>
 			</div>

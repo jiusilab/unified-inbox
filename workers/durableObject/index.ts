@@ -13,6 +13,10 @@ import { applyMigrations, mailboxMigrations } from "./migrations";
 import PostalMime from "postal-mime";
 import { connect } from "cloudflare:sockets";
 import { detectOtp, sendTelegram, escapeHtml } from "../otp";
+import {
+	heuristics, heuristicVerdict, llmClassify, normalizePattern, senderPatterns, ruleKindToFolder, htmlToPlain,
+	type Header, type LlmConfig, type MailFacts, type RuleKind, type Verdict,
+} from "../classify";
 import { syncPop3, testPop3Login, type Pop3Account, type Pop3Store } from "../pop3/sync";
 import { syncAccount, testLogin, type IngestMeta, type OpKind, type SyncStore, type SyncSummary, type ImapAccount } from "../imap/sync";
 
@@ -673,6 +677,8 @@ export class MailboxDO extends DurableObject<Env> {
 
 		if (!folder) return false;
 
+		this.#learnFromMove(id, folderId);
+
 		if (folderId === Folders.TRASH || folderId === "spam") this.#queueSourceOp(id, "trash");
 		else if (folderId === Folders.ARCHIVE) this.#queueSourceOp(id, "archive");
 		else if (folderId === Folders.INBOX) this.#queueSourceOp(id, "inbox");
@@ -693,7 +699,7 @@ export class MailboxDO extends DurableObject<Env> {
 	 */
 	async batchAction(
 		ids: string[],
-		action: "read" | "unread" | "archive" | "trash" | "delete",
+		action: "read" | "unread" | "archive" | "trash" | "delete" | "spam" | "promotions" | "inbox",
 		folder?: string,
 	) {
 		const targets = new Set<string>();
@@ -718,6 +724,8 @@ export class MailboxDO extends DurableObject<Env> {
 				await this.moveEmail(id, Folders.ARCHIVE);
 			} else if (action === "trash") {
 				await this.moveEmail(id, Folders.TRASH);
+			} else if (action === "spam" || action === "promotions" || action === "inbox") {
+				await this.moveEmail(id, action);
 			} else {
 				const atts = await this.deleteEmail(id);
 				if (atts) removed.push({ id, attachments: atts as any });
@@ -1010,7 +1018,18 @@ export class MailboxDO extends DurableObject<Env> {
 		}
 		if (!date) date = new Date().toISOString();
 
-		await this.createEmail(Folders.INBOX, {
+		const verdict = await this.#classifyIncoming({
+			from: (parsed.from?.address || "").toLowerCase(),
+			fromName: (parsed.from?.name || "").trim(),
+			subject: parsed.subject || "",
+			text: parsed.text || htmlToPlain(parsed.html || ""),
+			headers: (parsed.headers || []) as Header[],
+		}, [inReplyTo, ...references].filter(Boolean) as string[]).catch((e) => {
+			console.error("classify failed", (e as Error).message);
+			return { folder: "inbox", reason: "error" } as Verdict;
+		});
+
+		await this.createEmail(verdict.folder, {
 			id: messageId,
 			subject: parsed.subject || "",
 			sender: (parsed.from?.address || "").toLowerCase(),
@@ -1033,6 +1052,7 @@ export class MailboxDO extends DurableObject<Env> {
 				meta.source, meta.sourceUid, meta.sourceFolder ?? "INBOX", meta.gmMsgId ?? null, messageId,
 			);
 		}
+		this.ctx.storage.sql.exec(`UPDATE emails SET class_reason = ? WHERE id = ?`, verdict.reason.slice(0, 300), messageId);
 		try {
 			await this.#maybeOtp(messageId, parsed.subject || "", parsed.text || parsed.html || "",
 				(parsed.from?.name || parsed.from?.address || "").trim(), date, !!meta.seen);
@@ -1040,6 +1060,186 @@ export class MailboxDO extends DurableObject<Env> {
 			console.error("otp push failed", (e as Error).message);
 		}
 		return "new";
+	}
+
+	// ── Classification (inbox / promotions / spam) ──────────────────
+
+	#ruleFor(address: string): { pattern: string; kind: RuleKind } | null {
+		if (!address) return null;
+		const pats = senderPatterns(address);
+		const rows = [...this.ctx.storage.sql.exec(
+			`SELECT pattern, kind FROM sender_rules WHERE pattern IN (${pats.map(() => "?").join(",")})`, ...pats,
+		)] as { pattern: string; kind: RuleKind }[];
+		for (const p of pats) {
+			const r = rows.find((x) => x.pattern === p);
+			if (r) return r;
+		}
+		return null;
+	}
+
+	async #classifySettingsRaw(): Promise<{ llm?: Partial<LlmConfig> }> {
+		return ((await this.ctx.storage.get("classify")) as any) || {};
+	}
+
+	/** Pick a folder for a new incoming message. */
+	async #classifyIncoming(f: MailFacts, parentIds: string[]): Promise<Verdict> {
+		const rule = this.#ruleFor(f.from);
+		if (rule) return { folder: ruleKindToFolder[rule.kind], reason: `rule ${rule.kind} ${rule.pattern}` };
+
+		// Replies to something the user sent stay in the inbox
+		for (const mid of parentIds.slice(0, 10)) {
+			const hit = [...this.ctx.storage.sql.exec(
+				`SELECT 1 FROM emails WHERE message_id = ? AND folder_id IN ('sent', 'draft') LIMIT 1`, mid,
+			)][0];
+			if (hit) return { folder: "inbox", reason: "reply to own mail" };
+		}
+		if (detectOtp(f.subject, f.text)) return { folder: "inbox", reason: "verification code" };
+
+		const h = heuristics(f);
+		const cfg = (await this.#classifySettingsRaw()).llm;
+		if (cfg?.enabled && cfg.endpoint && cfg.model && cfg.apiKey) {
+			try {
+				const folder = await llmClassify(cfg as LlmConfig, f, h);
+				return { folder, reason: `llm ${cfg.model}` };
+			} catch (e) {
+				console.error("llm classify failed", (e as Error).message);
+				await this.ctx.storage.put("classify", {
+					...(await this.#classifySettingsRaw()),
+					lastError: `${new Date().toISOString()} ${(e as Error).message}`.slice(0, 300),
+				});
+			}
+		}
+		return heuristicVerdict(h);
+	}
+
+	/** Moving mail into or out of Spam / Promotions teaches a sender rule. */
+	#learnFromMove(emailId: string, to: string) {
+		const row = [...this.ctx.storage.sql.exec(
+			`SELECT sender, folder_id FROM emails WHERE id = ?`, emailId,
+		)][0] as { sender: string | null; folder_id: string } | undefined;
+		if (!row?.sender || row.folder_id === to) return;
+		const addr = normalizePattern(row.sender);
+		if (!addr || addr.startsWith("@")) return;
+		let kind: RuleKind | null = null;
+		if (to === "spam") kind = "spam";
+		else if (to === "promotions") kind = "promo";
+		else if ((row.folder_id === "spam" || row.folder_id === "promotions") && (to === "inbox" || to === "archive")) kind = "allow";
+		if (!kind) return;
+		this.ctx.storage.sql.exec(
+			`INSERT INTO sender_rules (pattern, kind, origin) VALUES (?, ?, 'learned')
+			 ON CONFLICT(pattern) DO UPDATE SET kind = excluded.kind, origin = 'learned', created_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
+			addr, kind,
+		);
+	}
+
+	async classifySettings() {
+		const s = await this.#classifySettingsRaw();
+		const counts = [...this.ctx.storage.sql.exec(`SELECT kind, COUNT(*) AS n FROM sender_rules GROUP BY kind`)] as { kind: string; n: number }[];
+		return {
+			llm: {
+				enabled: !!s.llm?.enabled,
+				endpoint: s.llm?.endpoint || "",
+				model: s.llm?.model || "",
+				hasKey: !!s.llm?.apiKey,
+			},
+			lastError: (s as any).lastError || null,
+			ruleCounts: Object.fromEntries(counts.map((c) => [c.kind, Number(c.n)])),
+		};
+	}
+
+	async classifySetLlm(input: { enabled?: boolean; endpoint?: string; model?: string; apiKey?: string; clearKey?: boolean }) {
+		const s = await this.#classifySettingsRaw();
+		const llm = { ...(s.llm || {}) } as Partial<LlmConfig>;
+		if (input.endpoint !== undefined) {
+			const e = String(input.endpoint).trim();
+			if (e && !/^https:\/\//i.test(e)) return { ok: false, error: "endpoint must start with https://" };
+			llm.endpoint = e;
+		}
+		if (input.model !== undefined) llm.model = String(input.model).trim();
+		if (input.apiKey) llm.apiKey = String(input.apiKey).trim();
+		if (input.clearKey) delete llm.apiKey;
+		if (input.enabled !== undefined) llm.enabled = !!input.enabled;
+		if (llm.enabled && !(llm.endpoint && llm.model && llm.apiKey)) {
+			return { ok: false, error: "endpoint, model and API key are required to enable" };
+		}
+		await this.ctx.storage.put("classify", { ...s, llm, lastError: null });
+		return { ok: true, settings: await this.classifySettings() };
+	}
+
+	async classifyTestLlm() {
+		const cfg = (await this.#classifySettingsRaw()).llm;
+		if (!(cfg?.endpoint && cfg.model && cfg.apiKey)) return { ok: false, error: "not configured" };
+		const f: MailFacts = {
+			from: "deals@shop.example.com", fromName: "Example Shop", subject: "48 hours only: 30% off everything",
+			text: "Our biggest sale of the year ends Sunday. Unsubscribe here.", headers: [],
+		};
+		try {
+			const folder = await llmClassify(cfg as LlmConfig, f, heuristics(f));
+			return { ok: true, sample: folder };
+		} catch (e) {
+			return { ok: false, error: (e as Error).message };
+		}
+	}
+
+	async rulesList() {
+		return [...this.ctx.storage.sql.exec(
+			`SELECT pattern, kind, origin, created_at FROM sender_rules ORDER BY created_at DESC LIMIT 1000`,
+		)];
+	}
+
+	async ruleAdd(patternInput: string, kind: RuleKind) {
+		const pattern = normalizePattern(patternInput);
+		if (!pattern) return { ok: false, error: "invalid address or domain" };
+		if (!["allow", "spam", "promo"].includes(kind)) return { ok: false, error: "invalid kind" };
+		this.ctx.storage.sql.exec(
+			`INSERT INTO sender_rules (pattern, kind, origin) VALUES (?, ?, 'manual')
+			 ON CONFLICT(pattern) DO UPDATE SET kind = excluded.kind, origin = 'manual'`,
+			pattern, kind,
+		);
+		return { ok: true, pattern };
+	}
+
+	async ruleDelete(pattern: string) {
+		this.ctx.storage.sql.exec(`DELETE FROM sender_rules WHERE pattern = ?`, String(pattern || "").toLowerCase());
+		return { ok: true };
+	}
+
+	/**
+	 * Re-file mail already in the inbox using sender rules and header
+	 * heuristics (no LLM, to keep it free). Bounded per call.
+	 */
+	async classifyInboxNow(limit = 300) {
+		const rows = [...this.ctx.storage.sql.exec(
+			`SELECT id, sender, subject, body, raw_headers FROM emails
+			 WHERE folder_id = 'inbox' AND class_reason IS NULL
+			 ORDER BY received_at DESC LIMIT ?`, limit,
+		)] as { id: string; sender: string | null; subject: string | null; body: string | null; raw_headers: string | null }[];
+		const moved: Record<string, number> = { spam: 0, promotions: 0 };
+		for (const r of rows) {
+			let headers: Header[] = [];
+			try { headers = JSON.parse(r.raw_headers || "[]"); } catch {}
+			const fromHdr = headers.find((h) => h.key?.toLowerCase() === "from")?.value || "";
+			const fromName = String(fromHdr).replace(/<[^>]*>/, "").replace(/"/g, "").trim();
+			const f: MailFacts = {
+				from: (r.sender || "").toLowerCase(), fromName,
+				subject: r.subject || "", text: htmlToPlain(r.body || ""), headers,
+			};
+			let v: Verdict;
+			const rule = this.#ruleFor(f.from);
+			if (rule) v = { folder: ruleKindToFolder[rule.kind], reason: `rule ${rule.kind} ${rule.pattern}` };
+			else if (detectOtp(f.subject, f.text)) v = { folder: "inbox", reason: "verification code" };
+			else v = heuristicVerdict(heuristics(f));
+			this.ctx.storage.sql.exec(`UPDATE emails SET class_reason = ? WHERE id = ?`, `rescan ${v.reason}`.slice(0, 300), r.id);
+			if (v.folder !== "inbox") {
+				// local move only: never touch the source mailbox on an automatic decision
+				this.ctx.storage.sql.exec(`UPDATE emails SET folder_id = ? WHERE id = ?`, v.folder, r.id);
+				moved[v.folder]++;
+			}
+		}
+		const left = [...this.ctx.storage.sql.exec(
+			`SELECT COUNT(*) AS n FROM emails WHERE folder_id = 'inbox' AND class_reason IS NULL`,
+		)][0] as { n: number };
+		return { scanned: rows.length, moved, remaining: Number(left.n) };
 	}
 
 	// ── Verification codes → Telegram ─────────────────────────────

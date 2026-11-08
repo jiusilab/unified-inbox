@@ -12,11 +12,63 @@ import DOMPurify from "dompurify";
 import { formatQuotedDate } from "shared/dates";
 import type { Attachment } from "~/types";
 
-export {
-	formatListDate,
-	formatDetailDate,
-	formatShortDate,
-} from "shared/dates";
+import { getLocale } from "~/lib/i18n";
+
+/**
+ * Date formatting for the UI. These mirror `shared/dates` but use the
+ * locale of the selected UI language (zh-CN / en-US) instead of the
+ * browser default. `locale` can be passed explicitly; otherwise the current
+ * UI language is used.
+ */
+function safeParseDate(dateStr: string | undefined | null): Date | null {
+	if (!dateStr) return null;
+	const d = new Date(dateStr);
+	return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** Email list rows: today → time, this year → "Apr 15", older → "Apr 15, 2024". */
+export function formatListDate(dateStr: string, locale: string = getLocale()): string {
+	const date = safeParseDate(dateStr);
+	if (!date) return dateStr;
+	const now = new Date();
+	if (date.toDateString() === now.toDateString()) {
+		return date.toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" });
+	}
+	if (date.getFullYear() === now.getFullYear()) {
+		return date.toLocaleDateString(locale, { month: "short", day: "numeric" });
+	}
+	return date.toLocaleDateString(locale, { month: "short", day: "numeric", year: "numeric" });
+}
+
+/** Email detail header: "Tue, Apr 15, 3:42 PM". */
+export function formatDetailDate(dateStr: string, locale: string = getLocale()): string {
+	const date = safeParseDate(dateStr);
+	if (!date) return dateStr;
+	return date.toLocaleDateString(locale, {
+		weekday: "short",
+		month: "short",
+		day: "numeric",
+		hour: "numeric",
+		minute: "2-digit",
+	});
+}
+
+/** Thread message headers — time only: "3:42 PM". */
+export function formatShortDate(dateStr: string, locale: string = getLocale()): string {
+	const date = safeParseDate(dateStr);
+	if (!date) return dateStr;
+	return date.toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" });
+}
+
+/** Full date + time for status lines (e.g. "last synced"). */
+export function formatDateTime(
+	dateStr: string | null | undefined,
+	locale: string = getLocale(),
+): string {
+	const date = safeParseDate(dateStr);
+	if (!date) return dateStr || "";
+	return date.toLocaleString(locale);
+}
 
 /** @deprecated Use `formatQuotedDate` from `shared/dates` directly. */
 export const formatComposeDate = formatQuotedDate;

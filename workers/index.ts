@@ -268,7 +268,7 @@ app.post("/api/v1/mailboxes/:mailboxId/emails/:id/move", async (c: AppContext) =
 
 app.post("/api/v1/mailboxes/:mailboxId/emails/batch", async (c: AppContext) => {
 	const { ids, action, folder } = (await c.req.json()) as { ids: string[]; action: string; folder?: string };
-	if (!Array.isArray(ids) || !["read", "unread", "archive", "trash", "delete"].includes(action))
+	if (!Array.isArray(ids) || !["read", "unread", "archive", "trash", "delete", "spam", "promotions", "inbox"].includes(action))
 		return c.json({ error: "Bad request" }, 400);
 	const res = await (c.var.mailboxStub as any).batchAction(ids, action, folder);
 	const keys = res.removed.flatMap((r: any) => r.attachments.map((att: any) => `attachments/${r.id}/${att.id}/${att.filename}`));
@@ -426,6 +426,27 @@ app.post("/api/v1/otp/enabled", async (c) => {
 	const { enabled } = (await c.req.json().catch(() => ({}))) as { enabled?: boolean };
 	return c.json(await uStub(c).otpSetEnabled(!!enabled));
 });
+
+// Mail classification (sender rules + optional LLM)
+app.get("/api/v1/classify", async (c) => c.json(await uStub(c).classifySettings()));
+app.post("/api/v1/classify/llm", async (c) => {
+	const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+	return c.json(await uStub(c).classifySetLlm({
+		enabled: body.enabled === undefined ? undefined : !!body.enabled,
+		endpoint: typeof body.endpoint === "string" ? body.endpoint : undefined,
+		model: typeof body.model === "string" ? body.model : undefined,
+		apiKey: typeof body.apiKey === "string" ? body.apiKey : undefined,
+		clearKey: !!body.clearKey,
+	}));
+});
+app.post("/api/v1/classify/llm/test", async (c) => c.json(await uStub(c).classifyTestLlm()));
+app.post("/api/v1/classify/rescan", async (c) => c.json(await uStub(c).classifyInboxNow()));
+app.get("/api/v1/classify/rules", async (c) => c.json(await uStub(c).rulesList()));
+app.post("/api/v1/classify/rules", async (c) => {
+	const { pattern, kind } = (await c.req.json().catch(() => ({}))) as { pattern?: string; kind?: string };
+	return c.json(await uStub(c).ruleAdd(String(pattern || ""), String(kind || "") as any));
+});
+app.delete("/api/v1/classify/rules", async (c) => c.json(await uStub(c).ruleDelete(c.req.query("pattern") || "")));
 
 // Agent API tokens (managed from Settings, behind Access)
 app.get("/api/v1/agent-tokens", async (c) =>

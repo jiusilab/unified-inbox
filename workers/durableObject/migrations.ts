@@ -289,4 +289,18 @@ export const mailboxMigrations: Migration[] = [
             BEGIN UPDATE meta SET value = value + 1 WHERE key = 'emails_version'; END;
         `,
 	},
+	{
+		// Mail classification: promotions folder, sender rules, why a mail was filed.
+		name: "16_classification",
+		sql: `
+            INSERT OR IGNORE INTO folders (id, name, is_deletable) VALUES ('promotions', 'Promotions', 0);
+            CREATE TABLE IF NOT EXISTS sender_rules (
+                pattern TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                origin TEXT NOT NULL DEFAULT 'manual',
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            );
+            ALTER TABLE emails ADD COLUMN class_reason TEXT;
+        `,
+	},
 ];

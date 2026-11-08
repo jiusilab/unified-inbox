@@ -244,7 +244,7 @@ export function useDeleteEmail() {
 	});
 }
 
-export type BatchAction = "read" | "unread" | "archive" | "trash" | "delete";
+export type BatchAction = "read" | "unread" | "archive" | "trash" | "delete" | "spam" | "promotions" | "inbox";
 
 export function useBatchEmails() {
 	const invalidate = useInvalidateEmailData();

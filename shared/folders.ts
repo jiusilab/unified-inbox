@@ -17,19 +17,22 @@ export const Folders = {
 	ARCHIVE: "archive",
 	TRASH: "trash",
 	SPAM: "spam",
+	PROMOTIONS: "promotions",
 } as const;
 
 export type FolderId = (typeof Folders)[keyof typeof Folders];
 
 /**
- * System folder IDs that appear in the sidebar (excludes spam).
+ * System folder IDs that appear in the sidebar.
  * Order here matches the sidebar display order.
  */
 export const SYSTEM_FOLDER_IDS: readonly FolderId[] = [
 	Folders.INBOX,
+	Folders.PROMOTIONS,
 	Folders.SENT,
 	Folders.DRAFT,
 	Folders.ARCHIVE,
+	Folders.SPAM,
 	Folders.TRASH,
 ];
 
@@ -44,6 +47,7 @@ export const FOLDER_DISPLAY_NAMES: Record<string, string> = {
 	[Folders.ARCHIVE]: "Archive",
 	[Folders.TRASH]: "Trash",
 	[Folders.SPAM]: "Spam",
+	[Folders.PROMOTIONS]: "Promotions",
 };
 
 /** Formatted string for tool parameter descriptions (agent + MCP). */
