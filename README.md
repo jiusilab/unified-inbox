@@ -24,6 +24,14 @@ Unified Inbox 是 [cloudflare/agentic-inbox](https://github.com/cloudflare/agent
 
   该 API 只在 `AGENT_API_HOST` 指定的独立域名上提供，不经过 Cloudflare Access，只认 token。
 - **列表操作**：勾选多封（或表头全选当前页）后批量标记已读/未读、归档、删除。删除先进垃圾箱，在垃圾箱里再删才是彻底删除；操作作用到整个会话，Gmail 来源会同步回源邮箱。
+- **邮件分类（推广 / 垃圾邮件）**：新邮件入库时自动分到收件箱、「推广」或「垃圾邮件」，判断顺序：
+  1. **发件人规则**：总是收件箱 / 推广 / 垃圾邮件，先匹配完整地址再匹配域名。规则可在设置里手动增删，也会从你的操作中学习：把邮件移进垃圾邮件或推广，就为该发件人记一条对应规则；从这两个文件夹移回收件箱或归档，就记为「总是收件箱」。
+  2. 回复你自己发出邮件的、含验证码的邮件，始终留在收件箱。
+  3. **可选模型分类**：在设置里填写 OpenAI 兼容端点、模型名和 API 密钥并开启后，规则判断不了的邮件交给模型决定（只发送发件人、主题和正文前 1500 字）。密钥只存在 Durable Object 里，不会返回给前端。调用失败时回退到下一步。
+  4. **邮件头判断**：DMARC/SPF 失败、显示名冒充其他地址、Reply-To 域名不一致、常见垃圾词等累计打分，超过阈值进垃圾邮件；带 `List-Unsubscribe`、`Precedence: bulk`、营销平台邮件头且主题不像账单、订单、安全通知的，进推广。
+
+  自动分类只在本地移动，不会改动源邮箱；手动移到垃圾邮件仍按原逻辑同步回 Gmail。设置里的「整理现有收件箱」会对从未分类过的旧邮件应用规则和邮件头判断（不调用模型，每次 300 封）。列表多选和邮件详情里都能标为垃圾邮件、移到推广，或标为「不是垃圾邮件 / 不是推广」。
+- **中英文界面**：所有界面文字都有中文和英文两套，在设置页顶部切换，选择保存在当前浏览器（`localStorage` 的 `ui-lang`），默认跟随浏览器语言。日期格式随语言变化。文案集中在 `app/lib/i18n.ts`。
 - **正文渲染**：HTML 邮件原样显示（沙箱 iframe）；Markdown 邮件按 GFM 渲染；纯文本保留换行并自动识别链接。手机上宽邮件会自动重排或缩放。
 - **PWA**：可添加到手机主屏幕，独立窗口运行，适配移动端（dvh 布局、iOS 输入框不缩放）。
 - **AI 侧边栏**：保留上游的 Email Agent（Workers AI），可读取、搜索邮件；发送类操作在只收模式下不可用。上游的 `/mcp` 端点已关闭。
@@ -50,7 +58,7 @@ Unified Inbox 是 [cloudflare/agentic-inbox](https://github.com/cloudflare/agent
 
 - Cloudflare 账号和一个托管在 Cloudflare 的域名，开启 Email Routing
 - Workers 免费版即可（拉取任务已拆小，避开 10ms CPU 限制）
-- 可选：Google Cloud OAuth 客户端（接入 Gmail 用）、Telegram Bot（验证码推送用）
+- 可选：Google Cloud OAuth 客户端（接入 Gmail 用）、Telegram Bot（验证码推送用）、任一 OpenAI 兼容模型 API（邮件分类用）
 
 ### 步骤
 
@@ -112,13 +120,13 @@ Unified Inbox 是 [cloudflare/agentic-inbox](https://github.com/cloudflare/agent
    - **Cloudflare Access**：网页端的所有域名（`workers.dev` 和自定义域名）都要被 Access 保护。在 Worker 的 Settings → Domains & Routes 开启一键 Access，把弹窗里的 `POLICY_AUD`、`TEAM_DOMAIN` 填进配置。
    - **Agent API 放行**：在 Access 里给 `<AGENT_API_HOST>/api/everest` 加一条 Bypass 策略；如果开了 Bot Fight Mode，需要关闭，否则外部 agent 会被人机验证拦下。
    - **Email Routing**：域名 → Email Routing 建 catch-all 规则，指向这个 Worker。
-   - 打开网页，在设置里添加 Gmail / IMAP / POP3 来源，按需开启验证码转 Telegram、生成 Agent token。
+   - 打开网页，在设置里添加 Gmail / IMAP / POP3 来源，按需开启验证码转 Telegram、配置邮件分类模型、生成 Agent token。
 
 ### 本地开发与测试
 
 ```bash
 npm run dev
-for f in test/*.test.ts; do npx tsx "$f"; done   # IMAP、网易 IMAP、POP3、验证码识别的测试（node:assert 脚本）
+for f in test/*.test.ts; do npx tsx "$f"; done   # IMAP、网易 IMAP、POP3、验证码识别、邮件分类的测试（node:assert 脚本）
 ```
 
 ## 已知限制
@@ -127,6 +135,8 @@ for f in test/*.test.ts; do npx tsx "$f"; done   # IMAP、网易 IMAP、POP3、�
 - Outlook/Hotmail 个人邮箱已不支持应用密码登录 IMAP，只能走转发，删除不会同步回去。
 - IMAP（授权码）和 POP3 来源只拉取，不回写删除/归档。
 - 删除整个邮箱时只删除了 R2 里的邮箱设置，Durable Object 中的数据和 R2 附件还没清理；用同一地址重建会看到旧邮件。单封邮件删除时附件会一并清除。
+- 邮件头判断是简单规则，可能误判；推广和垃圾邮件文件夹不会自动清理，建议定期看一眼，误判的移回收件箱即可让该发件人以后不再被误分。
+- 界面语言按浏览器保存，换设备需要重新选择。
 - Cloudflare Access 是唯一的网页端信任边界：通过 Access 的人可以访问所有邮箱。
 
 ## 许可
