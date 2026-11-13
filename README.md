@@ -31,10 +31,16 @@ Unified Inbox 是 [cloudflare/agentic-inbox](https://github.com/cloudflare/agent
   4. **邮件头判断**：DMARC/SPF 失败、显示名冒充其他地址、Reply-To 域名不一致、常见垃圾词等累计打分，超过阈值进垃圾邮件；带 `List-Unsubscribe`、`Precedence: bulk`、营销平台邮件头且主题不像账单、订单、安全通知的，进推广。
 
   自动分类只在本地移动，不会改动源邮箱；手动移到垃圾邮件仍按原逻辑同步回 Gmail。设置里的「整理现有收件箱」会对从未分类过的旧邮件应用规则和邮件头判断（不调用模型，每次 300 封）。列表多选后可直接标为垃圾邮件、移到推广，或标为「不是垃圾邮件 / 不是推广」；邮件详情里用「移动到」文件夹也有同样的学习效果。
+- **发信**：写信、回复、全部回复、转发都通过 [Resend](https://resend.com) 的 HTTP API 发出。
+  - 发件人下拉框列出 `SEND_FROM` 里的地址；回复和转发默认用原邮件寄到的那个地址（To 或 CC），找不到再用列表第一个。全部回复会去掉你自己的所有地址。
+  - Resend API Key 在「设置 → 发信」里粘贴保存，只存在 Durable Object 里，前端只显示「已配置（末四位）」；也可以用 Worker secret `RESEND_API_KEY` 代替。
+  - Resend 确认收下后才把副本存进「已发送」；失败时（未配置 Key、域名未验证等）界面直接提示 Resend 返回的原因，不会留下假的已发送记录。
+  - 发件显示名在「设置 → 账户」里设置，留空则只显示地址。草稿会记住所选发件人。
+  - Resend 免费版每天 100 封、每月 3000 封，所有发件地址共用。
 - **中英文界面**：所有界面文字都有中文和英文两套，在设置页顶部切换，选择保存在当前浏览器（`localStorage` 的 `ui-lang`），默认跟随浏览器语言。日期格式随语言变化。文案集中在 `app/lib/i18n.ts`。
 - **正文渲染**：HTML 邮件原样显示（沙箱 iframe）；Markdown 邮件按 GFM 渲染；纯文本保留换行并自动识别链接。手机上宽邮件会自动重排或缩放。
 - **PWA**：可添加到手机主屏幕，独立窗口运行，适配移动端（dvh 布局、iOS 输入框不缩放）。
-- **AI 侧边栏**：保留上游的 Email Agent（Workers AI），可读取、搜索邮件；发送类操作在只收模式下不可用。上游的 `/mcp` 端点已关闭。
+- **AI 侧边栏**：保留上游的 Email Agent（Workers AI），可读取、搜索邮件，也能代为回复和发信（同样经 Resend，从 `SEND_FROM` 地址发出）。上游的 `/mcp` 端点已关闭。
 
 ## 架构
 
@@ -43,13 +49,13 @@ Unified Inbox 是 [cloudflare/agentic-inbox](https://github.com/cloudflare/agent
  IMAP / POP3 ───┤  Cron 每分钟拉取
                 ▼
  转发邮件 ──> Email Routing ──> Hono Worker ──> MailboxDO（SQLite，每个邮箱一个）
-                                 │   │            └── R2：附件、邮箱设置
-         浏览器 / PWA ──Access──┘   │
-         外部 agent ──Bearer token──┘ (AGENT_API_HOST，只读)
+                                 │ │ │          └── R2：附件、邮箱设置
+         浏览器 / PWA ──Access──┘ │ └──> Resend API ──> 收件人（发信）
+         外部 agent ──Bearer token─┘ (AGENT_API_HOST，只读)
 ```
 
 - **前端**：React 19、React Router v7、Tailwind CSS、Zustand、`@cloudflare/kumo`
-- **后端**：Hono、Cloudflare Workers、Durable Objects（SQLite）、R2、Email Routing、Cron Triggers
+- **后端**：Hono、Cloudflare Workers、Durable Objects（SQLite）、R2、Email Routing、Cron Triggers；发信用 Resend
 - **认证**：网页端走 Cloudflare Access（生产环境必须）；Agent API 走 Bearer token
 
 ## 部署
@@ -58,6 +64,7 @@ Unified Inbox 是 [cloudflare/agentic-inbox](https://github.com/cloudflare/agent
 
 - Cloudflare 账号和一个托管在 Cloudflare 的域名，开启 Email Routing
 - Workers 免费版即可（拉取任务已拆小，避开 10ms CPU 限制）
+- 发信需要 [Resend](https://resend.com) 账号（免费版即可，无需绑卡）
 - 可选：Google Cloud OAuth 客户端（接入 Gmail 用）、Telegram Bot（验证码推送用）、任一 OpenAI 兼容模型 API（邮件分类用）
 
 ### 步骤
@@ -121,6 +128,11 @@ Unified Inbox 是 [cloudflare/agentic-inbox](https://github.com/cloudflare/agent
    - **Cloudflare Access**：网页端的所有域名（`workers.dev` 和自定义域名）都要被 Access 保护。在 Worker 的 Settings → Domains & Routes 开启一键 Access，把弹窗里的 `POLICY_AUD`、`TEAM_DOMAIN` 填进配置。
    - **Agent API 放行**：在 Access 里给 `<AGENT_API_HOST>/api/everest` 加一条 Bypass 策略；如果开了 Bot Fight Mode，需要关闭，否则外部 agent 会被人机验证拦下。
    - **Email Routing**：域名 → Email Routing 建 catch-all 规则，指向这个 Worker。
+   - **Resend 发信**：
+     1. 在 Resend 的 Domains 里添加 `SEND_FROM` 用到的每个域名，按页面给出的记录在 Cloudflare DNS 添加：`resend._domainkey`（TXT，DKIM）、`send` 和 `rsend`（CNAME，代理关闭）。建议再加 `_dmarc` TXT `v=DMARC1; p=none;`。这些都在子域上，不影响 Email Routing 的 MX 和根域 SPF。
+     2. 点 Verify，几分钟内状态变为 Verified。
+     3. 在 API Keys 里创建一个 Sending access 的 Key（`re_` 开头，只显示一次）。
+     4. 打开网页 → 设置 → 发信，粘贴 Key 并保存，然后给自己发一封测试。
    - 打开网页，在设置里添加 Gmail / IMAP / POP3 来源，按需开启验证码转 Telegram、配置邮件分类模型、生成 Agent token。
 
 ### 本地开发与测试
@@ -132,7 +144,8 @@ for f in test/*.test.ts; do npx tsx "$f"; done   # IMAP、网易 IMAP、POP3、�
 
 ## 已知限制
 
-- 发信依赖 Resend：Key 未配置时发送会直接报错；发件域名必须在 Resend 验证过。发出的邮件 Message-ID 由 Resend 生成，与「已发送」里保存的不同。
+- 发信依赖 Resend：Key 未配置时发送会直接报错；发件域名必须在 Resend 验证过。发出的邮件 Message-ID 由 Resend 生成，与「已发送」里保存的不同，对方回复时线程归并可能不准。
+- 如果还想在 Gmail 里用这些地址发信，可在 Gmail「用这个地址发送邮件」里填 SMTP `smtp.resend.com`、端口 465（SSL）、用户名 `resend`、密码为 Resend Key；这与本应用无关，可选。
 - Outlook/Hotmail 个人邮箱已不支持应用密码登录 IMAP，只能走转发，删除不会同步回去。
 - IMAP（授权码）和 POP3 来源只拉取，不回写删除/归档。
 - 删除整个邮箱时只删除了 R2 里的邮箱设置，Durable Object 中的数据和 R2 附件还没清理；用同一地址重建会看到旧邮件。单封邮件删除时附件会一并清除。
