@@ -5,11 +5,13 @@
 import { useKumoToastManager } from "@cloudflare/kumo";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
+	buildFromField,
 	buildQuotedReplyBlock,
 	escapeHtml,
 	formatComposeDate,
 	getSignatureBlock,
 	htmlToPlainText,
+	pickFromAddress,
 	splitEmailList,
 	stripHtml,
 	toEmailListValue,
@@ -17,19 +19,20 @@ import {
 import { useDeleteEmail, useForwardEmail, useReplyToEmail, useSaveDraft, useSendEmail } from "~/queries/emails";
 import { useMailbox } from "~/queries/mailboxes";
 import { useUIStore } from "~/hooks/useUIStore";
+import { useSendFrom } from "~/hooks/useSendFrom";
 import { useT } from "~/lib/i18n";
 
 function appendUniqueAddress(
 	addresses: string[],
 	seen: Set<string>,
 	address: string,
-	exclude?: string,
+	exclude?: Set<string>,
 ) {
 	const trimmed = address.trim();
 	if (!trimmed) return;
 
 	const normalized = trimmed.toLowerCase();
-	if (normalized === exclude || seen.has(normalized)) return;
+	if (exclude?.has(normalized) || seen.has(normalized)) return;
 
 	seen.add(normalized);
 	addresses.push(trimmed);
@@ -73,14 +76,14 @@ function buildForwardBody(
 
 function buildReplyAllFields(
 	original: NonNullable<ReturnType<typeof useUIStore.getState>["composeOptions"]["originalEmail"]>,
-	selfAddress?: string,
+	selfAddresses: Set<string>,
 ) {
 	const toRecipients: string[] = [];
 	const toSeen = new Set<string>();
-	appendUniqueAddress(toRecipients, toSeen, original.sender, selfAddress);
+	appendUniqueAddress(toRecipients, toSeen, original.sender, selfAddresses);
 
 	for (const recipient of splitEmailList(original.recipient)) {
-		appendUniqueAddress(toRecipients, toSeen, recipient, selfAddress);
+		appendUniqueAddress(toRecipients, toSeen, recipient, selfAddresses);
 	}
 
 	const ccRecipients: string[] = [];
@@ -88,7 +91,7 @@ function buildReplyAllFields(
 	for (const recipient of splitEmailList(original.cc)) {
 		const normalized = recipient.toLowerCase();
 		if (
-			normalized === selfAddress ||
+			selfAddresses.has(normalized) ||
 			toSeen.has(normalized) ||
 			ccSeen.has(normalized)
 		) {
@@ -107,7 +110,7 @@ function buildReplyAllFields(
 
 function buildInitialComposeFields(
 	composeOptions: ReturnType<typeof useUIStore.getState>["composeOptions"],
-	mailboxEmail: string | undefined,
+	selfAddresses: Set<string>,
 	sigBlock: string,
 ): ComposeFormFields {
 	const { draftEmail: draft, originalEmail: original, mode } = composeOptions;
@@ -140,7 +143,7 @@ function buildInitialComposeFields(
 	}
 
 	if (mode === "reply-all") {
-		const recipients = buildReplyAllFields(original, mailboxEmail?.toLowerCase());
+		const recipients = buildReplyAllFields(original, selfAddresses);
 		return {
 			...EMPTY_FIELDS,
 			...recipients,
@@ -168,12 +171,14 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 	const t = useT();
 	const { composeOptions, closePanel, closeCompose } = useUIStore();
 	const { data: currentMailbox } = useMailbox(mailboxId);
+	const sendFrom = useSendFrom();
 	const sendEmailMutation = useSendEmail();
 	const saveDraftMutation = useSaveDraft();
 	const replyMutation = useReplyToEmail();
 	const forwardMutation = useForwardEmail();
 	const deleteEmailMutation = useDeleteEmail();
 
+	const [fromAddr, setFromAddr] = useState("");
 	const [to, setTo] = useState("");
 	const [cc, setCc] = useState("");
 	const [bcc, setBcc] = useState("");
@@ -193,13 +198,26 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 
 	const sigBlock = useMemo(() => getSignatureBlock(currentMailbox?.settings), [currentMailbox]);
 
+	// Default From: a draft keeps its own sender; a reply/forward uses the address the
+	// original was sent to; otherwise the first allowed sending address.
+	const defaultFrom = useMemo(() => {
+		const draftSender = composeOptions.draftEmail?.sender?.toLowerCase();
+		if (draftSender && sendFrom.includes(draftSender)) return draftSender;
+		return pickFromAddress(sendFrom, composeOptions.originalEmail) || currentMailbox?.email || "";
+	}, [composeOptions, sendFrom, currentMailbox?.email]);
+
+	useEffect(() => { setFromAddr(defaultFrom); }, [defaultFrom]);
+
 	useEffect(() => {
 		if (lastInitializedOptionsRef.current === composeOptions) return;
 		lastInitializedOptionsRef.current = composeOptions;
 
+		const selfAddresses = new Set(
+			[currentMailbox?.email, ...sendFrom].filter(Boolean).map((a) => String(a).toLowerCase()),
+		);
 		const initialFields = buildInitialComposeFields(
 			composeOptions,
-			currentMailbox?.email,
+			selfAddresses,
 			sigBlock,
 		);
 		setError(null);
@@ -209,12 +227,13 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		setShowCcBcc(initialFields.showCcBcc);
 		setSubject(initialFields.subject);
 		setBody(initialFields.body);
-	}, [composeOptions, currentMailbox?.email, sigBlock]);
+	}, [composeOptions, currentMailbox?.email, sigBlock, sendFrom]);
 
 	const handleSaveDraft = async () => {
 		if (!mailboxId || isSending) return; setIsSavingDraft(true); setError(null);
 		try {
 			await saveDraftMutation.mutateAsync({ mailboxId, draft: {
+				from: fromAddr || undefined,
 				to,
 				cc: cc || undefined,
 				bcc: bcc || undefined,
@@ -240,8 +259,7 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		const toRecipients = splitEmailList(to);
 		if (toRecipients.length === 0) { setError(t("compose.noRecipient")); return; }
 		const ccRecipients = splitEmailList(cc); const bccRecipients = splitEmailList(bcc);
-		const fromName = currentMailbox.settings?.fromName || currentMailbox.name;
-		const from = fromName && fromName !== currentMailbox.email ? { email: currentMailbox.email, name: fromName } : currentMailbox.email;
+		const from = buildFromField(fromAddr || currentMailbox.email, currentMailbox.settings?.fromName);
 		const emailData = {
 			to: toEmailListValue(toRecipients),
 			cc: toEmailListValue(ccRecipients),
@@ -264,5 +282,5 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		finally { setIsSending(false); }
 	};
 
-	return { to, setTo, cc, setCc, bcc, setBcc, showCcBcc, setShowCcBcc, subject, setSubject, body, setBody, error, setError, isSavingDraft, isSending, formTitle, handleSaveDraft, handleSend, closeCompose, closePanel };
+	return { fromAddr, setFromAddr, sendFrom, to, setTo, cc, setCc, bcc, setBcc, showCcBcc, setShowCcBcc, subject, setSubject, body, setBody, error, setError, isSavingDraft, isSending, formTitle, handleSaveDraft, handleSend, closeCompose, closePanel };
 }

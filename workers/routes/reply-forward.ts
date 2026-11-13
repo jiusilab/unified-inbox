@@ -3,7 +3,7 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 import type { Context } from "hono";
-import { sendEmail } from "../email-sender";
+import { sendEmail, SendEmailError } from "../email-sender";
 import { storeAttachments } from "../lib/attachments";
 import type { EmailFull } from "../lib/schemas";
 import {
@@ -13,6 +13,7 @@ import {
 	buildReferencesChain,
 	buildThreadingHeaders,
 	resolveOriginalEmail,
+	getSendFrom,
 } from "../lib/email-helpers";
 import { SendEmailRequestSchema } from "../lib/schemas";
 import { Folders } from "../../shared/folders";
@@ -39,7 +40,7 @@ export async function handleReplyEmail(c: AppContext) {
 
 	let toStr: string, fromEmail: string, fromDomain: string;
 	try {
-		({ toStr, fromEmail, fromDomain } = validateSender(to, from, mailboxId));
+		({ toStr, fromEmail, fromDomain } = validateSender(to, from, mailboxId, getSendFrom(c.env)));
 	} catch (e) {
 		if (e instanceof SenderValidationError) return c.json({ error: e.message }, 400);
 		throw e;
@@ -51,6 +52,30 @@ export async function handleReplyEmail(c: AppContext) {
 		.checkSendRateLimit();
 	if (rateLimitError) {
 		return c.json({ error: rateLimitError }, 429);
+	}
+
+	// Send first; only keep a copy in Sent once Resend has accepted it.
+	try {
+		await sendEmail(c.env, {
+			to,
+			cc,
+			bcc,
+			from,
+			subject,
+			html,
+			text,
+			attachments: attachments?.map((att) => ({
+				content: att.content,
+				filename: att.filename,
+				type: att.type,
+				disposition: att.disposition,
+				contentId: att.contentId,
+			})),
+			headers: buildThreadingHeaders(originalMsgId, references),
+		});
+	} catch (e) {
+		if (e instanceof SendEmailError) return c.json({ error: e.message }, e.status);
+		throw e;
 	}
 
 	const attachmentData = await storeAttachments(c.env.BUCKET, messageId, attachments);
@@ -87,29 +112,7 @@ export async function handleReplyEmail(c: AppContext) {
 
 	await stub.markThreadRead(thread_id);
 
-	c.executionCtx.waitUntil(
-		sendEmail(c.env.EMAIL, {
-			to,
-			cc,
-			bcc,
-			from,
-			subject,
-			html,
-			text,
-			attachments: attachments?.map((att) => ({
-				content: att.content,
-				filename: att.filename,
-				type: att.type,
-				disposition: att.disposition,
-				contentId: att.contentId,
-			})),
-			headers: buildThreadingHeaders(originalMsgId, references),
-		}).catch((e) => {
-			console.error("Deferred reply delivery failed:", (e as Error).message);
-		}),
-	);
-
-	return c.json({ id: messageId, status: "sent" }, 202);
+	return c.json({ id: messageId, status: "sent" }, 200);
 }
 
 export async function handleForwardEmail(c: AppContext) {
@@ -129,7 +132,7 @@ export async function handleForwardEmail(c: AppContext) {
 
 	let toStr: string, fromEmail: string, fromDomain: string;
 	try {
-		({ toStr, fromEmail, fromDomain } = validateSender(to, from, mailboxId));
+		({ toStr, fromEmail, fromDomain } = validateSender(to, from, mailboxId, getSendFrom(c.env)));
 	} catch (e) {
 		if (e instanceof SenderValidationError) return c.json({ error: e.message }, 400);
 		throw e;
@@ -141,6 +144,29 @@ export async function handleForwardEmail(c: AppContext) {
 		.checkSendRateLimit();
 	if (rateLimitError) {
 		return c.json({ error: rateLimitError }, 429);
+	}
+
+	// Send first; only keep a copy in Sent once Resend has accepted it.
+	try {
+		await sendEmail(c.env, {
+			to,
+			cc,
+			bcc,
+			from,
+			subject,
+			html,
+			text,
+			attachments: attachments?.map((att) => ({
+				content: att.content,
+				filename: att.filename,
+				type: att.type,
+				disposition: att.disposition,
+				contentId: att.contentId,
+			})),
+		});
+	} catch (e) {
+		if (e instanceof SendEmailError) return c.json({ error: e.message }, e.status);
+		throw e;
 	}
 
 	const attachmentData = await storeAttachments(c.env.BUCKET, messageId, attachments);
@@ -173,26 +199,5 @@ export async function handleForwardEmail(c: AppContext) {
 		attachmentData,
 	);
 
-	c.executionCtx.waitUntil(
-		sendEmail(c.env.EMAIL, {
-			to,
-			cc,
-			bcc,
-			from,
-			subject,
-			html,
-			text,
-			attachments: attachments?.map((att) => ({
-				content: att.content,
-				filename: att.filename,
-				type: att.type,
-				disposition: att.disposition,
-				contentId: att.contentId,
-			})),
-		}).catch((e) => {
-			console.error("Deferred forward delivery failed:", (e as Error).message);
-		}),
-	);
-
-	return c.json({ id: messageId, status: "sent" }, 202);
+	return c.json({ id: messageId, status: "sent" }, 200);
 }

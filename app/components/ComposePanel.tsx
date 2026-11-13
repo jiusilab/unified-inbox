@@ -17,6 +17,9 @@ export default function ComposePanel() {
 	}>();
 
 	const {
+		fromAddr,
+		setFromAddr,
+		sendFrom,
 		to,
 		setTo,
 		cc,
@@ -66,6 +69,26 @@ export default function ComposePanel() {
 					{error && <Banner variant="error" text={error} />}
 
 					<div className="space-y-3">
+						{sendFrom.length > 0 && (
+							<div className="flex items-center gap-2">
+								<label htmlFor="compose-from" className="text-sm font-medium text-kumo-subtle w-14 shrink-0">
+									{t("compose.from")}
+								</label>
+								<div className="flex-1 min-w-0">
+									<select
+										id="compose-from"
+										value={fromAddr}
+										onChange={(e) => setFromAddr(e.target.value)}
+										className="w-full rounded-md border border-kumo-line bg-kumo-base px-2 py-1.5 text-sm text-kumo-default"
+									>
+										{sendFrom.map((a) => (
+											<option key={a} value={a}>{a}</option>
+										))}
+									</select>
+								</div>
+							</div>
+						)}
+
 						<div className="flex items-center gap-2">
 							<label className="text-sm font-medium text-kumo-subtle w-14 shrink-0">
 								{t("compose.to")}

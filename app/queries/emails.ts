@@ -282,6 +282,7 @@ export function useSaveDraft() {
 		}: {
 			mailboxId: string;
 			draft: {
+				from?: string;
 				to?: string;
 				cc?: string;
 				bcc?: string;

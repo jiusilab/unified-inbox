@@ -20,6 +20,9 @@ export default function ComposeEmail() {
 	const { isComposeModalOpen, closeComposeModal } = useUIStore();
 
 	const {
+		fromAddr,
+		setFromAddr,
+		sendFrom,
 		to,
 		setTo,
 		cc,
@@ -51,6 +54,20 @@ export default function ComposeEmail() {
 				</Dialog.Title>
 				<form onSubmit={(e) => handleSend(e, closeComposeModal)} className="space-y-4">
 					{error && <Banner variant="error" text={error} />}
+					{sendFrom.length > 0 && (
+						<label className="block text-sm font-medium text-kumo-default">
+							{t("compose.from")}
+							<select
+								value={fromAddr}
+								onChange={(e) => setFromAddr(e.target.value)}
+								className="mt-1 w-full rounded-md border border-kumo-line bg-kumo-base px-2 py-1.5 text-sm text-kumo-default"
+							>
+								{sendFrom.map((a) => (
+									<option key={a} value={a}>{a}</option>
+								))}
+							</select>
+						</label>
+					)}
 					<div className="flex items-center gap-2">
 						<div className="flex-1">
 							<Input

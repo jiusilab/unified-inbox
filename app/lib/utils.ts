@@ -96,6 +96,30 @@ export function splitEmailList(value?: string | null): string[] {
 }
 
 /**
+ * Default From for a reply/forward: the allowed sending address the original
+ * was addressed to (recipient / cc, case-insensitive), else the first one.
+ */
+export function pickFromAddress(
+	sendFrom: string[],
+	original?: { recipient?: string | null; cc?: string | null } | null,
+): string | undefined {
+	if (sendFrom.length === 0) return undefined;
+	const hay = `${original?.recipient || ""},${original?.cc || ""}`.toLowerCase();
+	const addrs = new Set(hay.match(/[^\s<>,;"']+@[^\s<>,;"']+/g) || []);
+	return sendFrom.find((a) => addrs.has(a.toLowerCase())) || sendFrom[0];
+}
+
+/** The auto-created unified mailbox's placeholder name is not a real sender name. */
+const PLACEHOLDER_FROM_NAMES = new Set(["unified inbox"]);
+
+/** Build the `from` payload: "Name <addr>" object when a display name is set. */
+export function buildFromField(address: string, fromName?: string | null): string | { email: string; name: string } {
+	const name = (fromName || "").trim();
+	if (!name || name.toLowerCase() === address.toLowerCase() || PLACEHOLDER_FROM_NAMES.has(name.toLowerCase()) || name.includes("@")) return address;
+	return { email: address, name };
+}
+
+/**
  * Convert a list of addresses into the API payload format.
  */
 export function toEmailListValue(addresses: string[]): string | string[] | undefined {

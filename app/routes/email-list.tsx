@@ -145,7 +145,7 @@ function FolderEmptyState({
 			<p className="text-sm text-kumo-subtle max-w-xs mb-5">
 				{t(config.descriptionKey)}
 			</p>
-			{false && (config as any).showCompose && (
+			{(config as any).showCompose && (
 				<Button
 					variant="primary"
 					size="sm"

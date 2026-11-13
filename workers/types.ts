@@ -5,8 +5,10 @@
 export interface Env extends Cloudflare.Env {
 	POLICY_AUD: string;
 	TEAM_DOMAIN: string;
-	/** send_email binding removed (receive-only deployment); kept optional for legacy code paths. */
+	/** Legacy Cloudflare send_email binding (unused; outbound mail goes through Resend). */
 	EMAIL?: any;
+	/** Optional fallback Resend key as a Worker secret; normally set in Settings → Sending. */
+	RESEND_API_KEY?: string;
 	IMAP_GMAIL_USER?: string;
 	IMAP_GMAIL_PASS?: string;
 	/** Google OAuth client for "Sign in with Google" Gmail accounts. */

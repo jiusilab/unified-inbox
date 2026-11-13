@@ -5,7 +5,7 @@
 
 Unified Inbox 是 [cloudflare/agentic-inbox](https://github.com/cloudflare/agentic-inbox) 的个人分支。目标是把 Gmail、Outlook/Hotmail、163、论坛通知、自有域名邮件等十几个邮箱汇总到同一个列表里，统一阅读、整理和删除，删除/归档会尽量同步回源邮箱。
 
-它是**只收不发**的：发信、回复、转发接口在服务端被直接拒绝（403）。
+发信（写信、回复、转发）通过 [Resend](https://resend.com) 发出：在「设置 → 发信」里粘贴 Resend API Key，发件地址从 `SEND_FROM` 列表里选。
 
 ## 功能
 
@@ -86,6 +86,7 @@ Unified Inbox 是 [cloudflare/agentic-inbox](https://github.com/cloudflare/agent
    | --- | --- |
    | `DOMAINS` | 收信域名，如 `example.com` |
    | `UNIFIED_MAILBOX` | 汇总到的邮箱地址，如 `inbox@example.com` |
+   | `SEND_FROM` | 允许的发件地址列表，如 `["you@example.com"]`；域名需先在 Resend 验证 |
    | `IMAP_INITIAL_DAYS` | 首次同步回溯天数，默认 90 |
    | `AGENT_API_HOST` | Agent 只读 API 的独立域名（同时在 `routes` 里配置为 custom domain） |
    | `POLICY_AUD` / `TEAM_DOMAIN` | Cloudflare Access 的应用 AUD 和团队域名 |
@@ -131,7 +132,7 @@ for f in test/*.test.ts; do npx tsx "$f"; done   # IMAP、网易 IMAP、POP3、�
 
 ## 已知限制
 
-- 只收不发，没有发信功能。
+- 发信依赖 Resend：Key 未配置时发送会直接报错；发件域名必须在 Resend 验证过。发出的邮件 Message-ID 由 Resend 生成，与「已发送」里保存的不同。
 - Outlook/Hotmail 个人邮箱已不支持应用密码登录 IMAP，只能走转发，删除不会同步回去。
 - IMAP（授权码）和 POP3 来源只拉取，不回写删除/归档。
 - 删除整个邮箱时只删除了 R2 里的邮箱设置，Durable Object 中的数据和 R2 附件还没清理；用同一地址重建会看到旧邮件。单封邮件删除时附件会一并清除。

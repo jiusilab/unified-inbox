@@ -256,6 +256,7 @@ export const messages = {
 
 	// Compose
 	"compose.close": { en: "Close compose", zh: "关闭写邮件" },
+	"compose.from": { en: "From", zh: "发件人" },
 	"compose.to": { en: "To", zh: "收件人" },
 	"compose.cc": { en: "CC", zh: "抄送" },
 	"compose.bcc": { en: "BCC", zh: "密送" },
@@ -479,6 +480,25 @@ export const messages = {
 	"action.notSpam": { en: "Not spam", zh: "不是垃圾邮件" },
 	"action.moveToPromotions": { en: "Move to Promotions", zh: "移到推广" },
 	"action.notPromotion": { en: "Not a promotion", zh: "不是推广" },
+	"sending.title": { en: "Sending", zh: "发信" },
+	"sending.description": {
+		en: "Outgoing mail (compose, reply, forward) is sent through Resend. Paste a Resend API key with sending access; it is stored on the server and never shown again in full.",
+		zh: "写信、回复和转发通过 Resend 发出。在这里粘贴有发送权限的 Resend API Key；它只保存在服务器端，之后不会再完整显示。",
+	},
+	"sending.apiKey": { en: "Resend API key", zh: "Resend API Key" },
+	"sending.apiKeyPlaceholder": { en: "re_…", zh: "re_…" },
+	"sending.statusConfigured": { en: "Configured (…{last4})", zh: "已配置（…{last4}）" },
+	"sending.statusNotConfigured": { en: "Not configured — sending is off", zh: "未配置，暂时无法发信" },
+	"sending.fromAddresses": { en: "Allowed From addresses: {list}", zh: "可用的发件地址：{list}" },
+	"sending.noFromAddresses": { en: "No SEND_FROM addresses configured on the Worker.", zh: "Worker 上没有配置 SEND_FROM 发件地址。" },
+	"sending.domainHint": {
+		en: "Each From domain must be verified in your Resend account, or Resend will reject the message.",
+		zh: "每个发件域名都需要先在 Resend 账户里验证，否则 Resend 会拒收。",
+	},
+	"sending.saved": { en: "Resend key saved", zh: "Resend Key 已保存" },
+	"sending.cleared": { en: "Resend key removed", zh: "Resend Key 已移除" },
+	"sending.clearKey": { en: "Remove key", zh: "移除 Key" },
+	"sending.error": { en: "Error: {message}", zh: "出错：{message}" },
 	"filter.title": { en: "Mail filtering", zh: "邮件分类" },
 	"filter.description": {
 		en: "New mail is sorted into Inbox, Promotions or Spam. Moving mail into or out of Spam / Promotions teaches a rule for that sender. Mailing-list headers and authentication results are used when no rule matches.",

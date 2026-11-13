@@ -89,6 +89,7 @@ export default function SettingsRoute() {
 				</div>
 
 				<SourceAccounts />
+				<SendingSettingsSection />
 				<MailFilter />
 				<OtpTelegram />
 				<AgentTokens />
@@ -697,6 +698,79 @@ function MailFilter() {
 						</div>
 						{st.lastError && <p className="text-xs text-kumo-subtle">{t("filter.lastError", { error: st.lastError })}</p>}
 					</div>
+				</>
+			)}
+			{msg && <p className={`text-xs ${msg.ok ? "text-kumo-subtle" : "text-kumo-danger"}`}>{msg.text}</p>}
+		</div>
+	);
+}
+
+type SendingSettings = { configured: boolean; last4: string | null; updatedAt: string | null; sendFrom: string[] };
+
+function SendingSettingsSection() {
+	const t = useT();
+	const [st, setSt] = useState<SendingSettings | null>(null);
+	const [apiKey, setApiKey] = useState("");
+	const [busy, setBusy] = useState<string | null>(null);
+	const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+	useEffect(() => {
+		jsonFetch("/api/v1/sending").then(setSt).catch((e) => setMsg({ ok: false, text: t("sending.error", { message: (e as Error).message }) }));
+	}, []);
+
+	const save = (clearKey?: boolean) => async () => {
+		setBusy(clearKey ? "clear" : "save");
+		setMsg(null);
+		try {
+			const j = await jsonFetch("/api/v1/sending/key", {
+				method: "POST",
+				body: JSON.stringify(clearKey ? { clearKey: true } : { apiKey }),
+			});
+			if (!j.ok) throw new Error(j.error);
+			setSt((prev) => ({ ...(prev || { sendFrom: [] }), ...j.settings }));
+			setApiKey("");
+			setMsg({ ok: true, text: clearKey ? t("sending.cleared") : t("sending.saved") });
+		} catch (e) {
+			setMsg({ ok: false, text: t("sending.error", { message: (e as Error).message }) });
+		}
+		setBusy(null);
+	};
+
+	const inputCls = "w-full rounded-md border border-kumo-line bg-kumo-base px-2 py-1 text-xs";
+
+	return (
+		<div id="sending" className="rounded-lg border border-kumo-line bg-kumo-base p-5 space-y-3">
+			<div>
+				<div className="flex items-center justify-between gap-2">
+					<span className="text-sm font-medium text-kumo-default">{t("sending.title")}</span>
+					{st && (
+						<Badge variant={st.configured ? "primary" : "secondary"}>
+							{st.configured ? t("sending.statusConfigured", { last4: st.last4 || "" }) : t("sending.statusNotConfigured")}
+						</Badge>
+					)}
+				</div>
+				<p className="text-xs text-kumo-subtle mt-1">{t("sending.description")}</p>
+			</div>
+			{st === null ? <Loader /> : (
+				<>
+					<label className="block text-xs text-kumo-subtle">{t("sending.apiKey")}
+						<input
+							type="password"
+							value={apiKey}
+							onChange={(e) => setApiKey(e.target.value)}
+							placeholder={st.configured ? `••••${st.last4 || ""}` : t("sending.apiKeyPlaceholder")}
+							className={inputCls + " mt-1"}
+							autoComplete="off"
+						/>
+					</label>
+					<div className="flex items-center justify-end gap-2">
+						{st.configured && <Button size="xs" variant="ghost" onClick={save(true)} loading={busy === "clear"} disabled={busy !== null}>{t("sending.clearKey")}</Button>}
+						<Button size="xs" variant="primary" onClick={save()} loading={busy === "save"} disabled={busy !== null || !apiKey.trim()}>{t("common.save")}</Button>
+					</div>
+					<p className="text-xs text-kumo-subtle">
+						{st.sendFrom.length > 0 ? t("sending.fromAddresses", { list: st.sendFrom.join(", ") }) : t("sending.noFromAddresses")}
+					</p>
+					<p className="text-xs text-kumo-subtle">{t("sending.domainHint")}</p>
 				</>
 			)}
 			{msg && <p className={`text-xs ${msg.ok ? "text-kumo-subtle" : "text-kumo-danger"}`}>{msg.text}</p>}

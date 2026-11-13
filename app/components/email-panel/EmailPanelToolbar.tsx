@@ -93,7 +93,7 @@ export default function EmailPanelToolbar({
 						{t("common.edit")}
 					</Button>
 				</>
-			) : false ? (
+			) : (
 				<>
 					<Tooltip content={t("action.reply")} side="bottom" asChild>
 						<Button
@@ -126,7 +126,7 @@ export default function EmailPanelToolbar({
 						/>
 					</Tooltip>
 				</>
-			) : null}
+			)}
 
 			<div className="h-5 w-px bg-kumo-fill mx-0.5" />
 

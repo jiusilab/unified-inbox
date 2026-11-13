@@ -32,6 +32,9 @@
 		"EMAIL_ADDRESSES": [],
 		// Everything is collected into this one mailbox.
 		"UNIFIED_MAILBOX": "inbox@example.com",
+		// Addresses outbound mail (via Resend) may be sent from. Each domain must be verified in Resend.
+		// The Resend API key itself is pasted in Settings → Sending (stored server-side, never in this file).
+		"SEND_FROM": ["you@example.com", "hello@example.com"],
 		// Optional legacy IMAP sources configured by env (most people add sources in Settings instead).
 		// e.g. "gmail" -> Worker secrets IMAP_GMAIL_USER / IMAP_GMAIL_PASS.
 		"IMAP_ACCOUNTS": "",

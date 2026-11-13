@@ -145,8 +145,8 @@ export default function Sidebar() {
 				</div>
 			</div>
 
-			{/* Compose (disabled: receive-only) */}
-			{false && <div className="px-3 py-3">
+			{/* Compose */}
+			<div className="px-3 py-3">
 				<Button
 					variant="primary"
 					icon={<PencilSimpleIcon size={16} />}
@@ -155,7 +155,7 @@ export default function Sidebar() {
 				>
 					{t("action.compose")}
 				</Button>
-			</div>}
+			</div>
 
 			{/* Navigation */}
 			<nav className="flex-1 overflow-y-auto px-2 space-y-0.5">

@@ -21,6 +21,7 @@ import {
 } from "~/lib/utils";
 import type { Email } from "~/types";
 import { useT } from "~/lib/i18n";
+import { useSendFrom } from "~/hooks/useSendFrom";
 
 interface ThreadMessageProps {
 	email: Email;
@@ -71,7 +72,9 @@ export default function ThreadMessage({
 	onPreviewImage,
 }: ThreadMessageProps) {
 	const t = useT();
-	const isSelf = email.sender === mailboxEmail;
+	const sendFrom = useSendFrom();
+	const senderLc = (email.sender || "").toLowerCase();
+	const isSelf = senderLc === (mailboxEmail || "").toLowerCase() || sendFrom.includes(senderLc);
 	const containerClassName = `${!isLast ? "border-b border-kumo-line" : ""} ${isDraft ? "border-l-2 border-l-kumo-warning bg-kumo-warning/[0.02]" : ""}`;
 	const senderLabel = isDraft ? t("panel.draftReply") : isSelf ? t("panel.you") : email.sender;
 

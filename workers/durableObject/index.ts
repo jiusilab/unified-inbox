@@ -1132,6 +1132,38 @@ export class MailboxDO extends DurableObject<Env> {
 		);
 	}
 
+	// ── Outbound sending (Resend) ────────────────────────────────────
+
+	/** Raw Resend API key, for server-side use only (never returned to the client). */
+	async sendingGetKey(): Promise<string | null> {
+		const s = ((await this.ctx.storage.get("sending")) as { resendKey?: string } | undefined) || {};
+		return s.resendKey || null;
+	}
+
+	async sendingSettings() {
+		const s = ((await this.ctx.storage.get("sending")) as { resendKey?: string; updatedAt?: string } | undefined) || {};
+		return {
+			configured: !!s.resendKey,
+			last4: s.resendKey ? s.resendKey.slice(-4) : null,
+			updatedAt: s.updatedAt || null,
+		};
+	}
+
+	async sendingSetKey(input: { apiKey?: string; clearKey?: boolean }) {
+		const s = ((await this.ctx.storage.get("sending")) as Record<string, unknown> | undefined) || {};
+		if (input.clearKey) {
+			delete s.resendKey;
+		} else {
+			const k = String(input.apiKey || "").trim();
+			if (!k) return { ok: false, error: "API key is empty" };
+			if (!/^re_[A-Za-z0-9_\-]{8,}$/.test(k)) return { ok: false, error: "That does not look like a Resend API key (it should start with re_)" };
+			s.resendKey = k;
+		}
+		s.updatedAt = new Date().toISOString();
+		await this.ctx.storage.put("sending", s);
+		return { ok: true, settings: await this.sendingSettings() };
+	}
+
 	async classifySettings() {
 		const s = await this.#classifySettingsRaw();
 		const counts = [...this.ctx.storage.sql.exec(`SELECT kind, COUNT(*) AS n FROM sender_rules GROUP BY kind`)] as { kind: string; n: number }[];

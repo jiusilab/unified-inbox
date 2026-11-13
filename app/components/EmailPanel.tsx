@@ -11,7 +11,8 @@ import EmailPanelHeader from "~/components/email-panel/EmailPanelHeader";
 import EmailPanelToolbar from "~/components/email-panel/EmailPanelToolbar";
 import SingleMessageView from "~/components/email-panel/SingleMessageView";
 import ThreadMessage from "~/components/email-panel/ThreadMessage";
-import { splitEmailList, toEmailListValue } from "~/lib/utils";
+import { buildFromField, pickFromAddress, splitEmailList, toEmailListValue } from "~/lib/utils";
+import { useSendFrom } from "~/hooks/useSendFrom";
 import api from "~/services/api";
 import { useDeleteEmail, useEmail, useMoveEmail, useReplyToEmail, useSendEmail, useThreadReplies, useUpdateEmail } from "~/queries/emails";
 import { useFolders } from "~/queries/folders";
@@ -46,6 +47,7 @@ export default function EmailPanel({ emailId }: { emailId: string }) {
 		data?: Mailbox;
 	};
 	const { closePanel, startCompose } = useUIStore();
+	const sendFrom = useSendFrom();
 	const toastManager = useKumoToastManager();
 	const t = useT();
 	const [isSending, setIsSending] = useState(false);
@@ -78,12 +80,12 @@ export default function EmailPanel({ emailId }: { emailId: string }) {
 	}, [allMessages, isDraftFolder, emailId]);
 
 	const lastReceivedMessage = useMemo(() => {
-		const ce = currentMailbox?.email;
-		const received = allMessages.filter((msg) => !draftMessageIds.has(msg.id) && msg.sender !== ce);
+		const self = new Set([currentMailbox?.email, ...sendFrom].filter(Boolean).map((a) => String(a).toLowerCase()));
+		const received = allMessages.filter((msg) => !draftMessageIds.has(msg.id) && !self.has((msg.sender || "").toLowerCase()));
 		if (received.length > 0) return received[0];
 		const nonDrafts = allMessages.filter((msg) => !draftMessageIds.has(msg.id));
 		return nonDrafts.length > 0 ? nonDrafts[0] : email;
-	}, [allMessages, draftMessageIds, currentMailbox?.email, email]);
+	}, [allMessages, draftMessageIds, currentMailbox?.email, sendFrom, email]);
 
 	const moveToFolders = useMemo(() => { const cur = folder || email?.folder_id; return folders.filter((f) => f.id !== cur); }, [folders, folder, email?.folder_id]);
 
@@ -117,9 +119,10 @@ export default function EmailPanel({ emailId }: { emailId: string }) {
 			if (!target.recipient) { toastManager.add({ title: t("draft.noRecipient"), variant: "error" }); return; }
 			const toRecipients = splitEmailList(target.recipient);
 			if (toRecipients.length === 0) { toastManager.add({ title: t("draft.noValidRecipient"), variant: "error" }); return; }
-			const fromName = currentMailbox.settings?.fromName || currentMailbox.name;
-			const from = fromName && fromName !== currentMailbox.email ? { email: currentMailbox.email, name: fromName } : currentMailbox.email;
 			const originalEmail = target.in_reply_to ? allMessages.find((msg) => msg.id === target.in_reply_to) : undefined;
+			const draftSender = target.sender?.toLowerCase();
+			const fromAddr = (draftSender && sendFrom.includes(draftSender) ? draftSender : pickFromAddress(sendFrom, originalEmail)) || currentMailbox.email;
+			const from = buildFromField(fromAddr, currentMailbox.settings?.fromName);
 			const emailData = {
 				to: toEmailListValue(toRecipients),
 				cc: toEmailListValue(splitEmailList(target.cc)),

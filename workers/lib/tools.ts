@@ -25,6 +25,8 @@ import {
 	generateMessageId,
 	buildReferencesChain,
 	buildThreadingHeaders,
+	getSendFrom,
+	pickDefaultFrom,
 } from "./email-helpers";
 import { verifyDraft } from "./ai";
 import { sendEmail } from "../email-sender";
@@ -417,7 +419,8 @@ export async function toolSendReply(
 	}
 
 	const { originalMsgId, references, threadId } = buildReferencesChain(originalEmail);
-	const fromDomain = mailboxId.split("@")[1];
+	const senderAddr = (pickDefaultFrom(getSendFrom(env), originalEmail) || mailboxId).toLowerCase();
+	const fromDomain = senderAddr.split("@")[1];
 	if (!fromDomain) throw new Error("Invalid mailbox email address");
 	const { messageId, outgoingMessageId } = generateMessageId(fromDomain);
 
@@ -434,9 +437,9 @@ export async function toolSendReply(
 	const fullBodyHtml = sanitizedBody + quotedBlock;
 
 	try {
-		await sendEmail(env.EMAIL, {
+		await sendEmail(env, {
 			to: params.to,
-			from: mailboxId,
+			from: senderAddr,
 			subject: params.subject,
 			html: fullBodyHtml,
 			headers: buildThreadingHeaders(originalMsgId, references),
@@ -451,7 +454,7 @@ export async function toolSendReply(
 		{
 			id: messageId,
 			subject: params.subject,
-			sender: mailboxId.toLowerCase(),
+			sender: senderAddr,
 			recipient: params.to.toLowerCase(),
 			date: new Date().toISOString(),
 			body: fullBodyHtml,
@@ -489,7 +492,8 @@ export async function toolSendEmail(
 		return { error: rateLimitError };
 	}
 
-	const fromDomain = mailboxId.split("@")[1];
+	const senderAddr = (pickDefaultFrom(getSendFrom(env)) || mailboxId).toLowerCase();
+	const fromDomain = senderAddr.split("@")[1];
 	if (!fromDomain) throw new Error("Invalid mailbox email address");
 	const { messageId, outgoingMessageId } = generateMessageId(fromDomain);
 
@@ -499,9 +503,9 @@ export async function toolSendEmail(
 	}
 
 	try {
-		await sendEmail(env.EMAIL, {
+		await sendEmail(env, {
 			to: params.to,
-			from: mailboxId,
+			from: senderAddr,
 			subject: params.subject,
 			html: sanitizedBody,
 		});
@@ -515,7 +519,7 @@ export async function toolSendEmail(
 		{
 			id: messageId,
 			subject: params.subject,
-			sender: mailboxId.toLowerCase(),
+			sender: senderAddr,
 			recipient: params.to.toLowerCase(),
 			date: new Date().toISOString(),
 			body: sanitizedBody,

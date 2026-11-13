@@ -6,7 +6,7 @@ import { type Context, Hono } from "hono";
 import { cors } from "hono/cors";
 import PostalMime from "postal-mime";
 import { z } from "zod";
-import { sendEmail } from "./email-sender";
+import { sendEmail, SendEmailError } from "./email-sender";
 import { storeAttachments, type StoredAttachment } from "./lib/attachments";
 import {
 	validateSender,
@@ -14,6 +14,7 @@ import {
 	generateMessageId,
 	buildThreadingHeaders,
 	listMailboxes,
+	getSendFrom,
 } from "./lib/email-helpers";
 import { SendEmailRequestSchema } from "./lib/schemas";
 import { handleReplyEmail, handleForwardEmail } from "./routes/reply-forward";
@@ -32,6 +33,7 @@ const CreateMailboxBody = z.object({
 });
 
 const DraftBody = z.object({
+	from: z.string().optional(),
 	to: z.string().optional(),
 	cc: z.string().optional(),
 	bcc: z.string().optional(),
@@ -83,19 +85,13 @@ app.use("/api/*", cors({
 }));
 app.use("/api/v1/mailboxes/:mailboxId/*", requireMailbox);
 
-// Receive-only deployment: refuse anything that would send mail.
-const sendBlocked = (c: Context) => c.json({ error: "Sending is disabled on this unified inbox (receive-only)." }, 403);
-app.post("/api/v1/mailboxes/:mailboxId/emails", sendBlocked);
-app.post("/api/v1/mailboxes/:mailboxId/emails/:id/reply", sendBlocked);
-app.post("/api/v1/mailboxes/:mailboxId/emails/:id/forward", sendBlocked);
-
 // -- Config ---------------------------------------------------------
 
 app.get("/api/v1/config", (c) => {
 	const domainsRaw = c.env.DOMAINS || "";
 	const domains = domainsRaw.split(",").map((d) => d.trim()).filter(Boolean);
 	const emailAddresses = c.env.EMAIL_ADDRESSES ?? [];
-	return c.json({ domains, emailAddresses });
+	return c.json({ domains, emailAddresses, sendFrom: getSendFrom(c.env) });
 });
 
 // -- Mailboxes ------------------------------------------------------
@@ -183,7 +179,7 @@ app.post("/api/v1/mailboxes/:mailboxId/emails", async (c: AppContext) => {
 
 	let toStr: string, fromEmail: string, fromDomain: string;
 	try {
-		({ toStr, fromEmail, fromDomain } = validateSender(to, from, mailboxId));
+		({ toStr, fromEmail, fromDomain } = validateSender(to, from, mailboxId, getSendFrom(c.env)));
 	} catch (e) {
 		if (e instanceof SenderValidationError) return c.json({ error: e.message }, 400);
 		throw e;
@@ -193,6 +189,19 @@ app.post("/api/v1/mailboxes/:mailboxId/emails", async (c: AppContext) => {
 	const stub = c.var.mailboxStub;
 	const rateLimitError = await (stub as any).checkSendRateLimit();
 	if (rateLimitError) return c.json({ error: rateLimitError }, 429);
+
+	// Send first; only keep a copy in Sent once Resend has accepted it.
+	try {
+		await sendEmail(c.env, {
+			to, cc, bcc, from, subject, html, text,
+			attachments: attachments?.map((att) => ({ content: att.content, filename: att.filename, type: att.type, disposition: att.disposition || "attachment", contentId: att.contentId })),
+			...(in_reply_to ? { headers: buildThreadingHeaders(in_reply_to, references || []) } : {}),
+		});
+	} catch (e) {
+		if (e instanceof SendEmailError) return c.json({ error: e.message }, e.status);
+		throw e;
+	}
+
 	const attachmentData = await storeAttachments(c.env.BUCKET, messageId, attachments);
 
 	await stub.createEmail(Folders.SENT, {
@@ -212,25 +221,20 @@ app.post("/api/v1/mailboxes/:mailboxId/emails", async (c: AppContext) => {
 		]),
 	}, attachmentData);
 
-	c.executionCtx.waitUntil(
-		sendEmail(c.env.EMAIL, {
-			to, cc, bcc, from, subject, html, text,
-			attachments: attachments?.map((att) => ({ content: att.content, filename: att.filename, type: att.type, disposition: att.disposition || "attachment", contentId: att.contentId })),
-			...(in_reply_to ? { headers: buildThreadingHeaders(in_reply_to, references || []) } : {}),
-		}).catch((e) => console.error("Deferred email delivery failed:", (e as Error).message)),
-	);
-	return c.json({ id: messageId, status: "sent" }, 202);
+	return c.json({ id: messageId, status: "sent" }, 200);
 });
 
 app.post("/api/v1/mailboxes/:mailboxId/drafts", async (c: AppContext) => {
 	const mailboxId = c.req.param("mailboxId")!;
-	const { to, cc, bcc, subject, body, in_reply_to, thread_id, draft_id } = DraftBody.parse(await c.req.json());
+	const { from, to, cc, bcc, subject, body, in_reply_to, thread_id, draft_id } = DraftBody.parse(await c.req.json());
+	const draftFrom = from?.trim().toLowerCase();
+	const draftSender = draftFrom && getSendFrom(c.env).includes(draftFrom) ? draftFrom : mailboxId.toLowerCase();
 	const stub = c.var.mailboxStub;
 	if (draft_id) await stub.deleteEmail(draft_id); // not atomic — create-then-delete would be safer
 	const messageId = crypto.randomUUID();
 	const now = new Date().toISOString();
 	await stub.createEmail(Folders.DRAFT, {
-		id: messageId, subject: subject || "", sender: mailboxId.toLowerCase(),
+		id: messageId, subject: subject || "", sender: draftSender,
 		recipient: (to || "").toLowerCase(), cc: cc?.toLowerCase() || null, bcc: bcc?.toLowerCase() || null,
 		date: now, body, in_reply_to: in_reply_to || null, email_references: null,
 		thread_id: thread_id || in_reply_to || messageId,
@@ -438,6 +442,13 @@ app.post("/api/v1/classify/llm", async (c) => {
 		apiKey: typeof body.apiKey === "string" ? body.apiKey : undefined,
 		clearKey: !!body.clearKey,
 	}));
+});
+// Outbound sending (Resend) — key stays server-side; only status + last 4 are returned
+app.get("/api/v1/sending", async (c) => c.json({ ...(await uStub(c).sendingSettings()), sendFrom: getSendFrom(c.env) }));
+app.post("/api/v1/sending/key", async (c) => {
+	const body = (await c.req.json().catch(() => ({}))) as { apiKey?: string; clearKey?: boolean };
+	const r = await uStub(c).sendingSetKey({ apiKey: typeof body.apiKey === "string" ? body.apiKey : undefined, clearKey: !!body.clearKey });
+	return c.json(r, r.ok ? 200 : 400);
 });
 app.post("/api/v1/classify/llm/test", async (c) => c.json(await uStub(c).classifyTestLlm()));
 app.post("/api/v1/classify/rescan", async (c) => c.json(await uStub(c).classifyInboxNow()));

@@ -47,19 +47,40 @@ export async function listMailboxes(
 // ── Sender Validation ──────────────────────────────────────────────
 
 /**
- * Normalise to/from addresses and validate the sender matches the mailbox.
- * Returns the normalised values or throws with a user-facing message.
+ * Addresses outbound mail may be sent from (env SEND_FROM, lower-cased).
+ * Accepts a JSON array or a comma-separated string.
+ */
+export function getSendFrom(env: Env): string[] {
+	const raw = (env as any).SEND_FROM as unknown;
+	let list: unknown[] = [];
+	if (Array.isArray(raw)) list = raw;
+	else if (typeof raw === "string") {
+		const t = raw.trim();
+		if (t.startsWith("[")) {
+			try { list = JSON.parse(t); } catch { list = []; }
+		} else list = t.split(",");
+	}
+	return list.map((x) => String(x).trim().toLowerCase()).filter((x) => /^[^@\s]+@[^@\s]+$/.test(x));
+}
+
+/**
+ * Normalise to/from addresses and validate the sender is an allowed address
+ * (any SEND_FROM entry, case-insensitive; falls back to the mailbox address
+ * when SEND_FROM is empty). Returns the normalised values or throws with a
+ * user-facing message. The returned domain is the From domain (used for Message-ID).
  */
 export function validateSender(
 	to: string | string[],
 	from: string | { email: string; name: string },
 	mailboxId: string,
+	allowedFrom: string[] = [],
 ): { toStr: string; fromEmail: string; fromDomain: string } {
 	const toStr = (Array.isArray(to) ? to.join(", ") : to).toLowerCase();
-	const fromEmail = (typeof from === "string" ? from : from.email).toLowerCase();
+	const fromEmail = (typeof from === "string" ? from : from.email).trim().toLowerCase();
 
-	if (fromEmail !== mailboxId.toLowerCase()) {
-		throw new SenderValidationError("From address must match the mailbox email address");
+	const allowed = allowedFrom.length > 0 ? allowedFrom.map((a) => a.toLowerCase()) : [mailboxId.toLowerCase()];
+	if (!allowed.includes(fromEmail)) {
+		throw new SenderValidationError(`From address must be one of: ${allowed.join(", ")}`);
 	}
 
 	const fromDomain = fromEmail.split("@")[1];
@@ -68,6 +89,20 @@ export function validateSender(
 	}
 
 	return { toStr, fromEmail, fromDomain };
+}
+
+/**
+ * Pick the default From for a reply/forward: the SEND_FROM address the original
+ * was addressed to (recipient / cc), else the first SEND_FROM entry.
+ */
+export function pickDefaultFrom(
+	allowedFrom: string[],
+	original?: { recipient?: string | null; cc?: string | null } | null,
+): string | null {
+	if (allowedFrom.length === 0) return null;
+	const hay = `${original?.recipient || ""},${original?.cc || ""}`.toLowerCase();
+	const addrs = new Set(hay.match(/[^\s<>,;"']+@[^\s<>,;"']+/g) || []);
+	return allowedFrom.find((a) => addrs.has(a.toLowerCase())) || allowedFrom[0];
 }
 
 export class SenderValidationError extends Error {
